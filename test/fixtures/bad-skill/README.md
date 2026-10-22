@@ -1,0 +1,2 @@
+# Bad skill
+For people.

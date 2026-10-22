@@ -1,0 +1,18 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "skillio",
+  "description": "Skillio: skills for building, checking and improving Agent Skills.",
+  "owner": {
+    "name": "Gonçalo Paraízo Gomes",
+    "url": "https://github.com/gongiskhan"
+  },
+  "plugins": [
+    {
+      "name": "skillio",
+      "source": "./",
+      "description": "Build skills with skill-creator plus measured evals, check them with every validator, improve them from evidence.",
+      "category": "development",
+      "tags": ["skills", "evals"]
+    }
+  ]
+}

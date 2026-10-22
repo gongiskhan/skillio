@@ -1,0 +1,44 @@
+{
+  "skill-creator": {
+    "repo": "https://github.com/anthropics/skills",
+    "commit": "dbd4588f9e1033efb41dad4bef2f7947c8993d44",
+    "license": "Apache-2.0",
+    "synced": "2026-10-22",
+    "use": "The builder. building-skills follows its workflow for drafting, test runs, the review viewer and benchmarks."
+  },
+  "superpowers-writing-skills": {
+    "repo": "https://github.com/obra/superpowers",
+    "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
+    "license": "MIT",
+    "synced": "2026-10-22",
+    "use": "TDD for skills: baseline pressure tests, matching the form of guidance to the failure, closing rationalisations."
+  },
+  "skill-judge": {
+    "repo": "https://github.com/softaworks/agent-toolkit",
+    "commit": "3027f20f3181758385a1bb8c022d4041dfb4de84",
+    "license": "MIT",
+    "synced": "2026-10-22",
+    "use": "A scoring rubric for skill design (knowledge delta, freedom, anti-patterns). The skill-reviewer agent uses parts of it."
+  },
+  "plugin-dev": {
+    "repo": "https://github.com/anthropics/claude-plugins-official",
+    "commit": "af59ee3a1051a29dda4a2e7a2af221aa457ae08b",
+    "license": "Apache-2.0",
+    "synced": "2026-10-22",
+    "use": "Anthropic's plugin-development guides and reviewer agents, for skills that ship inside plugins with hooks."
+  },
+  "task-observer": {
+    "repo": "https://github.com/rebelytics/one-skill-to-rule-them-all",
+    "commit": "3463c7c9cd2a2c2745af09c742100ad0b1465a68",
+    "license": "CC-BY-4.0",
+    "synced": "2026-10-22",
+    "use": "An always-on observer that logs corrections from real sessions and turns them into skill improvements. improving-skills borrows its method; install it separately to run it."
+  },
+  "agentskills-docs": {
+    "repo": "https://github.com/agentskills/agentskills",
+    "commit": "69ef37e9424c0a7ea9dd2293b559e43ec8176379",
+    "license": "CC-BY-4.0",
+    "synced": "2026-10-22",
+    "use": "The Agent Skills open standard and its authoring, evaluation and description-optimisation guides."
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "description": "Lint a skill after Claude writes or edits a file inside it. Set SKILLIO_HOOK=off to disable.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hook-lint.mjs\"",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}

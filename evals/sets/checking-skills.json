@@ -1,0 +1,21 @@
+[
+ {"query": "can you check the skill in skills/quote-compare before I share it with the team? I want to know if it's actually good", "should_trigger": true},
+ {"query": "audit all the skills in the ~/dev/ekoa-skills plugin, lint them and run whatever evals exist", "should_trigger": true},
+ {"query": "is this SKILL.md ready to publish to our marketplace? ~/dev/garrison/skills/kanban/SKILL.md", "should_trigger": true},
+ {"query": "review my web testing skill against anthropic's best practices and give it a score", "should_trigger": true},
+ {"query": "validate the frontmatter and structure of every skill in this repo, CI says one of them doesn't load", "should_trigger": true},
+ {"query": "vê se a skill de constituição de empresas está bem escrita e se é segura para dar à Marília usar", "should_trigger": true},
+ {"query": "grade my release-notes skill. does it beat plain claude or is it pointless?", "should_trigger": true},
+ {"query": "run the skill checks on the plugin we built yesterday and tell me what to fix before I push it", "should_trigger": true},
+ {"query": "is my skill's description too long? also check whether it overlaps with other skills I have installed", "should_trigger": true},
+ {"query": "lint my typescript in src/ and fix the eslint errors", "should_trigger": false},
+ {"query": "review this pull request for security issues before I merge it", "should_trigger": false},
+ {"query": "check whether the servers in my .mcp.json are configured right, one of them won't start", "should_trigger": false},
+ {"query": "my contracts skill keeps firing when people ask about leases, change the description so it stops", "should_trigger": false},
+ {"query": "run the playwright tests and tell me which ones failed and why", "should_trigger": false},
+ {"query": "validate this JSON schema against the sample payloads in fixtures/", "should_trigger": false},
+ {"query": "make me a new skill that formats board summaries from our sales spreadsheets", "should_trigger": false},
+ {"query": "before I upload my contracts skill to the claude app, make sure it won't get rejected and that it's well built", "should_trigger": true, "held_out": true},
+ {"query": "how good is the skill I wrote for the CSG screen migrations? be honest, I'm thinking of giving it to Denis", "should_trigger": true, "held_out": true},
+ {"query": "check the spelling and broken links in README.md and docs/", "should_trigger": false, "held_out": true}
+]

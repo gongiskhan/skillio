@@ -1,0 +1,14 @@
+# Agent instructions live in AGENTS.md; no tool-specific files in this repo.
+CLAUDE.md
+.claude/
+
+# Eval output (run-evals writes to ../skillio-workspace, but a bare
+# `claude plugin eval .` writes here).
+evals/results/
+
+# Local noise
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store
+*-workspace/

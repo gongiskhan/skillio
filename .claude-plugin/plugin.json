@@ -1,0 +1,22 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "skillio",
+  "displayName": "Skillio",
+  "version": "0.1.0",
+  "description": "Skills for working on skills: build them with Anthropic's skill-creator plus a measured eval suite, check them with every available validator and an independent reviewer, and improve them from evidence. Lints every SKILL.md as you edit it.",
+  "author": {
+    "name": "Gonçalo Paraízo Gomes",
+    "url": "https://github.com/gongiskhan"
+  },
+  "homepage": "https://github.com/gongiskhan/skillio",
+  "repository": "https://github.com/gongiskhan/skillio",
+  "license": "MIT",
+  "keywords": [
+    "skills",
+    "agent-skills",
+    "skill-creator",
+    "evals",
+    "lint",
+    "plugin-eval"
+  ]
+}

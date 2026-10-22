@@ -1,0 +1,21 @@
+[
+ {"query": "my pdf-forms skill never triggers when people ask to fill in a form, can you figure out why and fix it", "should_trigger": true},
+ {"query": "the eval results for quote-compare are in ~/dev/quote-compare-workspace, held-out recall is 60%. improve the description without overfitting it", "should_trigger": true},
+ {"query": "users say the meeting-notes skill ignores the action items section. here's a transcript where it skipped it, fix the skill", "should_trigger": true},
+ {"query": "this skill is 900 lines and slow, make it leaner without breaking what works", "should_trigger": true},
+ {"query": "the check report flagged six warnings on my deploy skill. go through them, fix what matters and re-run the evals after", "should_trigger": true},
+ {"query": "a skill dos vídeos da Ekoa às vezes dispara quando peço para editar um vídeo qualquer, ajusta-a para isso não acontecer", "should_trigger": true},
+ {"query": "extend my release-notes skill so it also handles hotfix branches, and make sure the old cases still pass", "should_trigger": true},
+ {"query": "claude picks the docx skill instead of mine when I ask for the contract draft. make my skill win for contracts", "should_trigger": true},
+ {"query": "the output of my invoice skill varies a lot between runs and sometimes the totals are wrong. make it consistent", "should_trigger": true},
+ {"query": "improve this paragraph of my blog post, it's too wordy", "should_trigger": false},
+ {"query": "fix the failing unit tests in packages/api", "should_trigger": false},
+ {"query": "optimise this SQL query, it takes 4 seconds on the orders table", "should_trigger": false},
+ {"query": "improve my prompt for the classification API call, the model mislabels refund emails as complaints", "should_trigger": false},
+ {"query": "speed up our playwright suite, it takes 12 minutes in CI", "should_trigger": false},
+ {"query": "check whether my new skill is ready to ship, I haven't changed anything since yesterday", "should_trigger": false},
+ {"query": "make a brand new skill for writing our quarterly investor update", "should_trigger": false},
+ {"query": "my changelog skill writes too much and people skip it. make it produce shorter output and show me it's actually better", "should_trigger": true, "held_out": true},
+ {"query": "why does my skill load and then claude does its own thing anyway? sort it out", "should_trigger": true, "held_out": true},
+ {"query": "improve the error messages in scripts/deploy.mjs so they say which env var is missing", "should_trigger": false, "held_out": true}
+]

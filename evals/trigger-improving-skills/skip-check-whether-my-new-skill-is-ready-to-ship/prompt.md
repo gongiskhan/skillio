@@ -1,0 +1,8 @@
+---
+description: "Should not invoke improving-skills"
+tags: [trigger, should-not-fire, skill:improving-skills]
+max_turns: 4
+allowed_tools: [Read, Glob, Grep, Skill]
+---
+
+check whether my new skill is ready to ship, I haven't changed anything since yesterday
