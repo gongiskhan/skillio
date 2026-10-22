@@ -22,13 +22,15 @@ claude plugin validate .claude-plugin/plugin.json --strict
 claude plugin validate .
 ```
 
-When you change a skill's description, re-run its trigger cases and compare with the last run (results go to `../skillio-workspace/skillio/evals/`):
+When you change a skill's description, re-run its tuning cases and compare with the last run (results go to `../skillio-workspace/skillio/evals/`):
 
 ```bash
-node scripts/skillio.mjs run-evals . --tag skill:<name> --ablation none
+node scripts/skillio.mjs run-evals . --tag <name>:tuning --ablation none --scaffold
 ```
 
-Don't tune descriptions on the `held-out` cases. If they miss, describe the intent better; never paste their wording into a description.
+`--scaffold` runs each case's `fixture.sh`, which creates the skill the prompt talks about in the run's empty workspace. Run the held-out cases (`--tag <name>:held-out`) only once the description is settled, and never tune on them: if they miss, describe the intent better; never paste their wording into a description.
+
+The trigger sets are `evals/sets/*.json`. To change a case, edit the JSON and regenerate that skill's folder with `node scripts/skillio.mjs trigger-cases . --skill <name> --from evals/sets/<name>.json --overwrite`.
 
 ## Rules
 

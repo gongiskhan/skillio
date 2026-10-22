@@ -6,6 +6,7 @@
 - Trigger cases
 - Near misses and decoys
 - Held-out cases
+- Fixtures for prompts about existing skills
 - Output cases and graders
 - Targets
 - Cost and time
@@ -69,6 +70,10 @@ When a known skill competes for the same requests, add a decoy: a skill folder u
 
 Write held-out prompts after the description is final, tag them `held-out` (set `"held_out": true` in the JSON), and never read their results while editing the description. If tuning-set recall climbs and held-out recall doesn't, the description is memorising prompts, not describing a task. Copying a missed prompt's wording into the description is the usual way this happens; the linter flags it (D006).
 
+## Fixtures for prompts about existing skills
+
+Runs start in an empty folder. A prompt like "check my release-notes skill" then sends Claude searching, finding nothing and giving up before it decides whether to load a skill, so the case measures the empty folder. Add `"fixture": "release-notes"` to that item in the trigger set: `trigger-cases` writes a `case.yaml` and a `fixture.sh` that creates `skills/release-notes/SKILL.md` in the run's workspace. Plugin eval runs it only with `--scaffold`, as the user, so pass `--scaffold` to `skillio run-evals` for suites you wrote.
+
 ## Output cases and graders
 
 Output cases check what the skill produced. Tag them `output`, keep the baseline arm on, and grade with the cheapest grader that can decide:
@@ -83,7 +88,56 @@ Output cases check what the skill produced. Tag them `output`, keep the baseline
 
 An `llm` judge passes on two of three votes. Judges drift on long text and refuse binary files such as .pptx or PDF, so grade files with code and keep judges for short, readable outputs. Point a file grader at the file's contents (`target: {source: file, path: ...}`), not at `files`, which is only the list of created paths.
 
-Runs start in an empty folder. If the task needs input files, put them in a `case.yaml` with `context.add_dirs` (read-only fixtures) or a `context.scaffold_script` (runs only with `--scaffold`, as you, so only for suites you wrote). Tools that write (`Write`, `Edit`, `Bash`) need `--allow-tools`.
+Runs start in an empty folder. If the task needs input files, put them in a `case.yaml` with `context.add_dirs` (read-only fixtures) or a `context.scaffold_script` (runs only with `--scaffold`, as you, so only for suites you wrote). Tools that write (`Write`, `Edit`, `Bash`) need `--allow-tools`; without them no file gets created in either arm and every file grader fails.
+
+A complete output case, `evals/output-my-skill/q3-board-summary/`:
+
+```markdown
+<!-- prompt.md -->
+---
+description: "Board summary from the Q3 export"
+tags: [output, skill:my-skill]
+max_turns: 25
+allowed_tools: [Read, Glob, Grep, Skill, Write, Bash]
+---
+
+Turn sales_q3.csv into the usual board summary and save it as board-summary.md.
+```
+
+```yaml
+# case.yaml
+schema_version: "1.1"
+name: q3-board-summary
+context:
+  add_dirs: [inputs]      # inputs/sales_q3.csv sits next to this file
+```
+
+```markdown
+<!-- graders/file-written.md -->
+---
+type: file_exists
+path: "**/board-summary.md"
+---
+```
+
+```markdown
+<!-- graders/totals-match.md -->
+---
+type: regex
+target: {source: file, path: board-summary.md}
+pattern: "Total revenue: 1,284k"
+---
+```
+
+```markdown
+<!-- graders/no-invented-figures.md -->
+---
+type: llm
+focus: {source: file, path: board-summary.md}
+---
+
+PASS if every figure in the summary appears in inputs/sales_q3.csv or is a sum of figures there.
+FAIL if any figure has no source in the input. Answer FAIL if you can't tell.
 
 Drop any assertion that passes both with and without the skill: it measures Claude, not the skill. Investigate any that fails in both: the case or the grader is usually wrong.
 
@@ -99,7 +153,7 @@ Starting points, not standards; agree real ones with whoever owns the outcome.
 
 ## Cost and time
 
-Each run is a full Claude session on the user's account. 30 trigger cases at 3 runs with `--ablation none` is 90 short sessions, usually a few dollars and 5 to 15 minutes at the default concurrency of 4. Output cases with the baseline double the runs and are longer. `skillio run-evals` passes `--max-cost-usd 10` unless told otherwise; raise it deliberately for big suites.
+Each run is a full Claude session on the user's account. Skillio's own 60 trigger cases at 3 runs with `--ablation none` were 180 short sessions: $10.34 and about 6 minutes at concurrency 8. Output cases with the baseline double the runs and are longer. `skillio run-evals` caps a run at $10 unless you pass `--max-cost <usd>`; raise it deliberately for big suites. A run that hits the cap exits with code 2 and its numbers are partial.
 
 ## Isolation and trust
 

@@ -65,13 +65,13 @@ For the description: describe the intent behind missed prompts, never their word
 Before the first paid run, tell the user in one line how many cases and runs it is and the cost cap (`--max-cost`, $10 by default per call). Then run the cases the change should affect, filtered to this skill so sibling skills in the same plugin don't add cost and noise:
 
 ```bash
-# description changes: this skill's trigger cases, one arm
-skillio run-evals <path> --tag skill:<name> --ablation none --label after-<change>
+# description changes: this skill's tuning cases, one arm (held-out cases stay unread until the end)
+skillio run-evals <path> --tag <name>:tuning --ablation none --scaffold --label after-<change>
 # body, script or reference changes: output cases, with the baseline arm
-skillio run-evals <path> --tag output --label after-<change>
+skillio run-evals <path> --tag output --allow-tools Write Edit Bash --label after-<change>
 ```
 
-Before keeping a change, run everything once more without a tag filter. Keep the change only if it beats the before number by more than the noise (`${CLAUDE_PLUGIN_ROOT}/skills/checking-skills/references/reading-results.md` explains how much that is), held-out cases don't drop, and cost didn't jump without a reason. Otherwise copy the snapshot back. If a run stops early (exit code 2: cost cap or a rejected credential) or the claude CLI is missing, say so and don't compare partial numbers.
+Before keeping a change, run the held-out cases (`--tag <name>:held-out`) and the rest of the suite once. Keep the change only if it beats the before number by more than the noise (`${CLAUDE_PLUGIN_ROOT}/skills/checking-skills/references/reading-results.md` explains how much that is), held-out cases don't drop, and cost didn't jump without a reason. Otherwise copy the snapshot back. If a run stops early (exit code 2: cost cap or a rejected credential) or the claude CLI is missing, say so and don't compare partial numbers.
 
 Log every attempt, kept or not, in `changelog.md` in the workspace (`skillio workspace <path>` prints where): the date, hypothesis, change, before and after numbers, and the decision. Failed attempts are information; they stop the next session trying the same thing.
 
@@ -79,7 +79,7 @@ Log every attempt, kept or not, in `changelog.md` in the workspace (`skillio wor
 
 Two tools can propose changes in a loop. Both are useful and both can fool you; `references/tuning-loop.md` has the rules.
 
-- **skill-creator's description optimiser** (`vendor/skill-creator`, "Description Optimization"): generates candidate descriptions from failed trigger queries. Its own trigger test loads the description as a slash command, not as a skill, so its scores are not a measurement; in one measured case it reported 17% recall for a description that real loading triggered every time. Use its candidates as ideas and measure them with `skillio run-evals --tag skill:<name> --ablation none`.
+- **skill-creator's description optimiser** (`vendor/skill-creator`, "Description Optimization"): generates candidate descriptions from failed trigger queries. Its own trigger test loads the description as a slash command, not as a skill, so its scores are not a measurement; in one measured case it reported 17% recall for a description that real loading triggered every time. Use its candidates as ideas and measure them with `skillio run-evals <path> --tag <name>:tuning --ablation none`.
 - **`/claude-api hillclimb`**: the hill-climbing guide in Anthropic's claude-api skill (`shared/evals/eval-hillclimb.md` in anthropics/skills), with a train/test split, noise and headroom checks and keep-or-revert rounds. Suggest it when the skill runs through the API and has a scripted eval, and the user's Claude Code has the claude-api skill.
 
 Whatever loop runs, it must never edit the graders or the held-out cases, and a person approves the final change.

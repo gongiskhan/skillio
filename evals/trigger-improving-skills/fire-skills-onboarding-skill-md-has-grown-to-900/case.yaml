@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: fire-skills-onboarding-skill-md-has-grown-to-900
+context:
+  scaffold_script: fixture.sh

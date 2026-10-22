@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: fire-extend-my-release-notes-skill-so-it-also-ha
+context:
+  scaffold_script: fixture.sh

@@ -86,9 +86,15 @@ test/                      unit tests and deliberately broken fixtures
 
 Skillio is tested with its own tools. `evals/` holds 60 trigger cases across the three skills (35 should-fire, 25 near misses, 11 held out), generated from `evals/sets/*.json`, with a decoy carrying skill-creator's exact description installed next to them.
 
-RESULTS_PLACEHOLDER
+| Skill | Should fire (tuning) | Should fire (held out) | Near misses that stayed quiet |
+| --- | --- | --- | --- |
+| building-skills | 30/30 runs | 9/9 | 27/27 |
+| checking-skills | 23/27 | 3/6 | 24/24 |
+| improving-skills | 20/27 | 6/6 | 24/24 |
 
-Run them with `npm run evals:trigger` (about 180 short sessions, a few dollars).
+No false fires anywhere, and building-skills beat the skill-creator decoy in every run. The first run scored much lower, and the transcripts showed why: the eval runs had inherited a cloud session's environment, and some cases pointed at skills that didn't exist in the empty test folder. Both were fixed in the tooling and the cases, not in the descriptions. Two description rewrites were then measured against the originals and neither beat the noise, so the originals stayed. The remaining misses are small requests ("how good is my skill?") that Claude handles itself after reading the SKILL.md; say "use Skillio" or call the skill by name when you want the full treatment. The details are in [evals/RESULTS.md](evals/RESULTS.md).
+
+Run them with `npm run evals:trigger` (tuning cases) and `npm run evals:held-out`. The full suite is 180 short sessions, about $11.
 
 ## Learning
 

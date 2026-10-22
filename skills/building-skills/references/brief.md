@@ -36,8 +36,9 @@ Parsing, arithmetic, reconciliation, validation of the output file.
 ## Data and secrets
 No credentials or real client data in the skill folder. Privacy rules for the inputs.
 
-## Evals (written before the body)
-Trigger set, held-out set, output cases with code graders first, baseline arm on.
+## Evals
+Before the body: a trigger set (should fire, near misses) and output cases with code graders first, baseline arm on.
+After the description is final: a held-out trigger set, run once.
 
 ## Done when
 Trigger and output targets (see eval-suite.md), reviewer findings resolved,

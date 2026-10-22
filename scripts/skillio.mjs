@@ -9,10 +9,11 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, cpSync, rmSync, app
 import { join, resolve, basename, dirname, relative } from 'node:path';
 import { spawnSync, spawn } from 'node:child_process';
 import { lintSkill, finding } from './lib/lint.mjs';
-import { detectTarget, workspaceFor, timestamp } from './lib/target.mjs';
+import { detectTarget, workspaceFor, timestamp, pluginSkills } from './lib/target.mjs';
 import { inventory, compare, listingSize, defaultRoots } from './lib/collisions.mjs';
 import { suiteSummary, writeTriggerCases, writeDecoy, listDecoys, readResults, triggerMetrics, listCases, classify, evalDir, readPluginJson, pct, lookupCase } from './lib/evals.mjs';
 import { renderFindings, terminalFindings, counts, verdict, PLUGIN_ROOT } from './lib/report.mjs';
+import { buildWrapper } from './lib/wrapper.mjs';
 
 const HELP = `Skillio: tools for building, checking and improving Agent Skills.
 
@@ -28,7 +29,7 @@ Static checks (free, no model calls)
 
 Evals (each run is a real model call on your account)
   evals <path>              Show the eval suite for a skill or plugin and what it covers
-  trigger-cases <path> --skill <name> --from <file.json> [--runs n] [--overwrite]
+  trigger-cases <path> --skill <name> --from <file.json> [--into dir] [--runs n] [--overwrite]
                             Turn a trigger set ([{query, should_trigger, held_out}], the
                             format skill-creator exports) into claude plugin eval cases
   decoy <path> --name <n> --description <text>
@@ -36,7 +37,7 @@ Evals (each run is a real model call on your account)
                             run-evals installs beside the skill under test
   run-evals <path> [--tag t]... [--case glob] [--runs n] [-j n] [--max-cost usd]
             [--ablation none|with-without] [--model m] [--judge-model m] [--publish]
-            [--allow-tools t...] [--label name] [--dry-run]
+            [--allow-tools t...] [--scaffold] [--evals-from dir] [--label name] [--dry-run]
                             Run claude plugin eval isolated from your browser and
                             messaging, results into the workspace, then summarise
   results <aggregate-result.json> [--path <plugin-or-skill>]
@@ -134,11 +135,13 @@ function collisionFindings(target, opts) {
   const roots = opts.root ? opts.root.map(r => ({ path: resolve(r), source: 'extra', depth: 6 })) : defaultRoots();
   const exclude = target.pluginRoot ? [target.pluginRoot] : target.skills;
   const installed = inventory(roots, { exclude });
-  const own = target.skills.map(d => inventory([{ path: d, source: 'target', depth: 0 }])[0]).filter(Boolean);
+  const read = dirs => dirs.map(d => inventory([{ path: d, source: 'target', depth: 0 }])[0]).filter(Boolean);
+  const own = read(target.skills);
+  // Siblings in the same plugin compete too, even when only one skill is checked.
+  const family = target.pluginRoot ? read(pluginSkills(target.pluginRoot)).map(f => ({ ...f, source: 'same plugin' })) : own;
   const results = [];
   for (const s of own) {
-    // Siblings in the same plugin compete too.
-    const siblings = own.filter(o => o !== s);
+    const siblings = family.filter(o => o.path !== s.path);
     const hits = compare(s, [...siblings, ...installed], { threshold: 0.25, top: 5 });
     results.push({ skill: s.name, hits: hits.map(h => ({ name: h.other.name, source: h.other.source, path: h.other.path, score: +h.score.toFixed(2), shared: h.shared.slice(0, 8) })) });
     for (const h of hits) {
@@ -173,7 +176,7 @@ function cmdInventory(pos, opts) {
   const size = listingSize(all);
   if (opts.json) return out(JSON.stringify({ size, skills: all }, null, 2));
   for (const s of all.sort((a, b) => a.source.localeCompare(b.source) || a.name.localeCompare(b.name))) {
-    out(`${s.source.padEnd(9)} ${s.name.padEnd(36)} ${String(s.description.length).padStart(5)} chars${s.modelInvocable ? '' : '  (manual only)'}`);
+    out(`${s.source.padEnd(9)} ${s.name.padEnd(36)} ${String(s.description.length).padStart(5)} chars${s.modelInvocable ? '' : '  (manual only)'}  ${s.dir}`);
   }
   out(`\n${all.length} skills; ${size.count} model-invocable, about ${size.tokens} tokens of listing.`);
 }
@@ -236,40 +239,6 @@ function hasClaude() {
   return r.status === 0 ? r.stdout.trim() : null;
 }
 
-// Builds a throwaway plugin in the workspace that claude plugin validate and
-// claude plugin eval can load: a copy of the plugin (or a bare skill wrapped
-// in one), plus any decoy skills from the eval folder installed beside it.
-const COPY_SKIP = /(^|\/)(\.git|node_modules|__pycache__|\.DS_Store)(\/|$)|(^|\/)evals\/results(\/|$)|-workspace(\/|$)/;
-
-export function buildWrapper(target, ws, { withDecoys = true } = {}) {
-  const root = join(ws, 'skillio', 'wrapper');
-  rmSync(root, { recursive: true, force: true });
-  let evalsRoot;
-  if (target.pluginRoot) {
-    cpSync(target.pluginRoot, root, { recursive: true, filter: src => !COPY_SKIP.test(relative(target.pluginRoot, src)) });
-    const pj = readPluginJson(root) ?? {};
-    evalsRoot = join(root, typeof pj.experimental?.evals === 'string' ? pj.experimental.evals : 'evals');
-  } else {
-    const name = basename(target.path);
-    mkdirSync(join(root, '.claude-plugin'), { recursive: true });
-    cpSync(target.path, join(root, 'skills', name), { recursive: true, filter: src => !COPY_SKIP.test(relative(target.path, src)) });
-    const pj = { name: `${name}-wrapper`, version: '0.0.0', description: `Temporary wrapper Skillio builds to validate and evaluate ${name}` };
-    if (existsSync(join(target.path, 'evals'))) pj.experimental = { evals: `skills/${name}/evals` };
-    writeFileSync(join(root, '.claude-plugin', 'plugin.json'), JSON.stringify(pj, null, 2) + '\n');
-    evalsRoot = join(root, 'skills', name, 'evals');
-  }
-  const installed = [];
-  if (withDecoys) {
-    for (const d of listDecoys(evalsRoot)) {
-      let name = d.name;
-      if (existsSync(join(root, 'skills', name))) name += '-rival';
-      cpSync(d.dir, join(root, 'skills', name), { recursive: true });
-      installed.push(name);
-    }
-  }
-  return { root, decoys: installed };
-}
-
 function runValidate(dir, file) {
   const r = spawnSync('claude', ['plugin', 'validate', file ?? dir, '--json'], { encoding: 'utf8', cwd: dir });
   try { return JSON.parse(r.stdout); } catch { return { success: r.status === 0, raw: (r.stdout + r.stderr).trim().slice(0, 2000) }; }
@@ -311,6 +280,7 @@ function cmdCheck(pos, opts) {
   const surface = opts.target ?? 'claude-code';
   const ran = [];
   let findings = [];
+  let skillDoctor = null;
 
   const lint = lintTarget(target, { target: surface });
   for (const r of lint) findings = findings.concat(r.findings);
@@ -342,6 +312,31 @@ function cmdCheck(pos, opts) {
       const v = runValidate(target.pluginRoot ?? root, target.pluginRoot ? join(target.pluginRoot, '.claude-plugin', 'plugin.json') : null);
       findings = findings.concat(validateFindings(v, target.pluginRoot ? 'enclosing plugin' : 'skill', { componentsOnly: !target.pluginRoot }));
       ran.push(['claude plugin validate', `${v.success === false ? 'failed' : 'passed'} (${target.pluginRoot ? 'enclosing plugin' : 'temporary wrapper plugin'})`]);
+    } else if (target.kind === 'marketplace') {
+      const v = runValidate(target.path);
+      findings = findings.concat(validateFindings(v, 'marketplace'));
+      let failed = v.success === false;
+      for (const pr of target.plugins) {
+        const pv = runValidate(pr, join(pr, '.claude-plugin', 'plugin.json'));
+        findings = findings.concat(validateFindings(pv, basename(pr)));
+        failed ||= pv.success === false;
+      }
+      ran.push(['claude plugin validate', `${failed ? 'failed' : 'passed'} (marketplace and ${target.plugins.length} plugin(s))`]);
+    } else {
+      const v = runValidate(target.path);
+      findings = findings.concat(validateFindings(v, 'skills folder', { componentsOnly: true }));
+      ran.push(['claude plugin validate', `${v.success === false ? 'failed' : 'passed'} (component check of the folder)`]);
+    }
+    // /skill-doctor sees what Claude Code actually loads (including skills synced
+    // from claude.ai, which have no files here to compare), with context cost
+    // and use counts. Non-interactive mode prints it without a model call.
+    const sd = spawnSync('claude', ['-p', '/skill-doctor'], { encoding: 'utf8', timeout: 90000 });
+    if (sd.status === 0 && /skill/i.test(sd.stdout)) {
+      skillDoctor = sd.stdout.trim();
+      const rows = skillDoctor.split('\n').filter(l => /^\s{2}\S+(\s{2,}\S+){3,}/.test(l) && !/^\s{2}skill\s/.test(l));
+      ran.push(['/skill-doctor', `${rows.length} skill(s) loaded in your setup; usage table in the report`]);
+    } else {
+      ran.push(['/skill-doctor', 'unavailable here (run it in an interactive session; it may live in /plugin, Stats tab)']);
     }
   } else {
     ran.push(['claude plugin validate', opts.claude === false ? 'skipped (--no-claude)' : 'skipped (claude CLI not found)']);
@@ -363,7 +358,7 @@ function cmdCheck(pos, opts) {
   const stamp = timestamp();
   const dir = join(ws, 'skillio', 'checks', stamp);
   mkdirSync(dir, { recursive: true });
-  const docs = relative(dir, join(PLUGIN_ROOT, 'docs', 'principles.md'));
+  const docs = join(PLUGIN_ROOT, 'docs', 'principles.md');
   const md = [
     `# Skillio check: ${name}`,
     '',
@@ -378,12 +373,13 @@ function cmdCheck(pos, opts) {
     '## Findings',
     '',
     findings.length ? renderFindings(findings, { docsBase: docs }) : 'None.',
+    ...(skillDoctor ? ['## Skills loaded in your setup (/skill-doctor)', '', '```text', skillDoctor, '```', ''] : []),
     '## Not covered by static checks',
     '',
     '- Whether the skill fires on real phrasing and stays quiet on near misses: run the trigger suite (`run-evals --tag trigger --ablation none`).',
     '- Whether output is better than Claude without the skill: run the output cases with the baseline arm.',
     '- Judgement calls on content (knowledge Claude already has, freedom vs fragility, examples): the skill-reviewer agent.',
-    '- Usage and context cost in your real setup: `/skill-doctor` in an interactive session.',
+    '- How the skill is used day to day: `/skill-doctor` counts uses over time; run it again after a week of real work.',
     '',
   ].join('\n');
   writeFileSync(join(dir, 'report.md'), md);
@@ -417,7 +413,7 @@ function cmdTriggerCases(pos, opts) {
   const items = JSON.parse(readFileSync(resolve(opts.from), 'utf8'));
   if (!Array.isArray(items)) fail('--from must hold a JSON array of {query, should_trigger, held_out?}');
   const skill = opts.skill ?? lintSkill(target.skills[0]).info.name;
-  const root = evalsRootFor(target);
+  const root = opts.into ? resolve(opts.into) : evalsRootFor(target);
   mkdirSync(root, { recursive: true });
   const written = writeTriggerCases(root, skill, items, { runs: opts.runs, overwrite: !!opts.overwrite });
   out(`Wrote ${written.length} case(s) under ${root}:`);
@@ -436,65 +432,96 @@ function cmdDecoy(pos, opts) {
 // Variables a parent Claude Code session passes to anything it spawns. Left
 // in, they let eval runs reach the parent's messaging channel, and in cloud
 // sessions they tell the child it is a remote session, where Claude believes
-// it can't create skills (measured: 1 of 3 runs fired with them, 3 of 3
-// without). Eval runs should look like a fresh local session.
-const STRIP_ENV = [
-  'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN', 'SESSION_INGRESS_URL', 'CLAUDE_SESSION_INGRESS_TOKEN_FILE',
-  'CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE', 'CLAUDE_CODE_REMOTE_SESSION_ID', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_SESSION_ID',
-  'CCR_SESSION_PROFILE', 'CCR_SETTINGS_JSON_OVERLAY',
-];
+// it can't create skills (measured on one case: 1 of 3 runs fired with them,
+// 3 of 3 without). Eval runs should look like a fresh local session, so every
+// session variable goes, except the ones that pick the model provider and
+// carry credentials.
+const KEEP_ENV = /^CLAUDE_CODE_(USE_|OAUTH|API_KEY|PROVIDER|.*AUTH|CLIENT_|.*CERT|.*PROXY|SKIP_BEDROCK|SKIP_VERTEX|SKIP_FOUNDRY|MAX_OUTPUT)/;
+function evalEnv() {
+  const env = { ...process.env };
+  for (const k of Object.keys(env)) {
+    if (/^(CCR_|SESSION_INGRESS|CLAUDE_SESSION_)/.test(k)) delete env[k];
+    else if (k.startsWith('CLAUDE_CODE_') && !KEEP_ENV.test(k)) delete env[k];
+    else if (['CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_EFFORT', 'CLAUDE_AFTER_LAST_COMPACT', 'CLAUDE_AUTO_BACKGROUND_TASKS', 'CLAUDE_CHROME_PERMISSION_MODE'].includes(k)) delete env[k];
+  }
+  env.CLAUDE_CODE_ENABLE_CFC = '0';
+  return env;
+}
+
+const RUN_EVAL_OPTS = new Set(['tag', 'case', 'runs', 'concurrency', 'maxCost', 'maxCostUsd', 'ablation', 'model', 'judgeModel', 'threshold', 'allowTools', 'publish', 'label', 'dryRun', 'scaffold', 'evalsFrom']);
 
 function cmdRunEvals(pos, opts) {
   if (!pos[0]) fail('run-evals needs a path');
+  const unknown = Object.keys(opts).filter(k => !RUN_EVAL_OPTS.has(k));
+  if (unknown.length) fail(`run-evals doesn't know ${unknown.map(k => '--' + k.replace(/[A-Z]/g, c => '-' + c.toLowerCase())).join(', ')}; run skillio with no arguments for the options`);
   const target = detectTarget(pos[0]);
-  const ws = workspaceFor(target, target.kind === 'skill' ? target.path : null);
   if (!target.pluginRoot && target.kind !== 'skill') fail('run-evals needs a plugin or a skill');
-  const evalsHere = target.pluginRoot ? evalDir(target.pluginRoot) : join(target.path, 'evals');
-  let pluginDir = target.pluginRoot;
-  let decoys = [];
-  if (!target.pluginRoot || listDecoys(evalsHere).length) {
-    ({ root: pluginDir, decoys } = buildWrapper(target, ws));
-  }
+  const ws = workspaceFor(target, target.kind === 'skill' ? target.path : null);
+  const evalsFrom = opts.evalsFrom ? resolve(opts.evalsFrom) : null;
+  const evalsHere = evalsFrom ?? (target.pluginRoot ? evalDir(target.pluginRoot) : join(target.path, 'evals'));
+  if (!existsSync(evalsHere)) fail(`no eval cases at ${evalsHere}`);
+  const cases = listCases(evalsHere);
+  const needsWrapper = !target.pluginRoot || listDecoys(evalsHere).length > 0 || !!evalsFrom;
+
   const stamp = timestamp();
   const outDir = join(ws, 'skillio', 'evals', stamp + (opts.label ? `-${opts.label}` : ''));
-  mkdirSync(outDir, { recursive: true });
-  const args = ['plugin', 'eval', pluginDir, '--output-dir', outDir, '--report', join(outDir, 'report.html'), '--trust-plugin'];
+  const pluginDirShown = needsWrapper ? join(ws, 'skillio', 'wrapper') : target.pluginRoot;
+  const tags = [...(opts.tag ?? [])];
+  const skillName = target.kind === 'skill' ? (lintSkill(target.path).info.name ?? basename(target.path)) : null;
+  if (target.kind === 'skill' && target.pluginRoot && !tags.length && !opts.case) {
+    // One skill inside a plugin: don't pay for the sibling skills' cases.
+    tags.push(`skill:${skillName}`);
+  }
+  const args = ['plugin', 'eval', pluginDirShown, '--output-dir', outDir, '--report', join(outDir, 'report.html'), '--trust-plugin'];
   if (!opts.publish) args.push('--no-publish');
-  for (const t of opts.tag ?? []) args.push('--tag', t);
+  for (const t of tags) args.push('--tag', t);
   if (opts.case) args.push('--case', opts.case);
   if (opts.runs) args.push('--runs', String(opts.runs));
   args.push('--concurrency', String(opts.concurrency ?? 4));
-  args.push('--max-cost-usd', String(opts.maxCost ?? 10));
+  args.push('--max-cost-usd', String(opts.maxCost ?? opts.maxCostUsd ?? 10));
   if (opts.ablation) args.push('--ablation', opts.ablation);
   if (opts.model) args.push('--model', opts.model);
   if (opts.judgeModel) args.push('--judge-model', opts.judgeModel);
   if (opts.threshold) args.push('--threshold', String(opts.threshold));
+  if (opts.scaffold) args.push('--scaffold');
   if (opts.allowTools?.length) args.push('--allow-tools', ...opts.allowTools);
-  const env = { ...process.env, CLAUDE_CODE_ENABLE_CFC: '0' };
-  for (const k of STRIP_ENV) delete env[k];
-  writeFileSync(join(outDir, 'command.txt'), `claude ${args.map(a => (/\s/.test(a) ? JSON.stringify(a) : a)).join(' ')}\n`);
-  if (opts.dryRun) { out(readFileSync(join(outDir, 'command.txt'), 'utf8')); return; }
+  const command = `claude ${args.map(a => (/\s/.test(a) ? JSON.stringify(a) : a)).join(' ')}`;
+
+  const scaffolded = cases.filter(c => existsSync(join(c.dir, 'case.yaml')) && /scaffold_script/.test(readFileSync(join(c.dir, 'case.yaml'), 'utf8')));
+  if (scaffolded.length && !opts.scaffold) {
+    out(`Note: ${scaffolded.length} case(s) set up their workspace with a scaffold script, which plugin eval runs only with --scaffold (it runs as you, so pass it only for suites you wrote). Without it those cases start empty.`);
+  }
+  if (tags.length && target.kind === 'skill' && target.pluginRoot && !opts.tag) out(`Running only cases tagged skill:${skillName}.`);
+  if (opts.dryRun) { out(command); return; }
+
+  let decoys = [];
+  let pluginDir = target.pluginRoot;
+  if (needsWrapper) ({ root: pluginDir, decoys } = buildWrapper(target, ws, { evalsFrom }));
+  mkdirSync(outDir, { recursive: true });
+  writeFileSync(join(outDir, 'command.txt'), command + '\n');
   if (decoys.length) out(`Decoys installed beside the skill under test: ${decoys.join(', ')}`);
-  out(`Running: claude ${args.join(' ')}`);
+  out(`Running: ${command}`);
   out(`Results: ${outDir}`);
-  const child = spawn('claude', args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn('claude', args, { env: evalEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
   const log = join(outDir, 'run.log');
   child.stdout.on('data', d => { process.stdout.write(d); appendFileSync(log, d); });
   child.stderr.on('data', d => { process.stderr.write(d); appendFileSync(log, d); });
+  child.on('error', e => fail(`could not start claude: ${e.message}. Is Claude Code 2.1.269 or later installed?`));
   child.on('close', code => {
     const agg = join(outDir, 'aggregate-result.json');
     if (existsSync(agg)) {
-      const summary = summarise(agg, target);
+      const summary = summarise(agg, target, evalsFrom);
       writeFileSync(join(outDir, 'summary.md'), summary);
       out('\n' + summary);
     } else {
       out(`\nNo aggregate-result.json in ${outDir}; see run.log.`);
     }
+    if (code === 2) out('Exit 2: a partial run (cost ceiling hit or credential rejected). Don\'t compare its numbers with a full run.');
     process.exit(code ?? 1);
   });
 }
 
-function summarise(aggPath, target) {
+function summarise(aggPath, target, evalsFrom = null) {
   const res = readResults(aggPath);
   const lines = [`# Eval summary`, '', `${aggPath}`, ''];
   lines.push(`Overall score ${res.overallScore ?? 'n/a'}${res.meanDelta != null ? `, mean delta vs no plugin ${res.meanDelta}` : ''}. Cost $${res.costUsd?.toFixed?.(2) ?? '?'}, ${Math.round(res.durationSeconds ?? 0)} s${res.partial ? `. PARTIAL RUN (${res.partialReason})` : ''}.`, '');
@@ -502,7 +529,7 @@ function summarise(aggPath, target) {
   for (const dir of target.skills) {
     const name = lintSkill(dir).info.name ?? basename(dir);
     const plugin = pluginRoot ? readPluginJson(pluginRoot)?.name : `${basename(dir)}-wrapper`;
-    const casesDir = pluginRoot ? evalDir(pluginRoot) : join(dir, 'evals');
+    const casesDir = evalsFrom ?? (pluginRoot ? evalDir(pluginRoot) : join(dir, 'evals'));
     const index = new Map(listCases(casesDir).map(c => [c.name, { ...c, cls: classify(c, name, plugin) }]));
     const m = triggerMetrics(res, index);
     if (!m.train.cases && !m.heldOut.cases && !m.negative.cases) continue;
@@ -518,7 +545,7 @@ function summarise(aggPath, target) {
   for (const dir of target.skills) {
     const name = lintSkill(dir).info.name ?? basename(dir);
     const plugin = pluginRoot ? readPluginJson(pluginRoot)?.name : `${basename(dir)}-wrapper`;
-    const casesDir = pluginRoot ? evalDir(pluginRoot) : join(dir, 'evals');
+    const casesDir = evalsFrom ?? (pluginRoot ? evalDir(pluginRoot) : join(dir, 'evals'));
     for (const c of listCases(casesDir)) {
       const cls = classify(c, name, plugin);
       const prev = allIndex.get(c.dir);
@@ -544,7 +571,13 @@ function cmdResults(pos, opts) {
 // --- working files ----------------------------------------------------------------------
 
 function cmdWorkspace(pos) {
-  const target = detectTarget(pos[0] ?? '.');
+  const p = resolve(pos[0] ?? '.');
+  let target;
+  try { target = detectTarget(p); } catch {
+    // A skill that doesn't exist yet: its workspace still goes beside it.
+    out(join(dirname(p), `${basename(p)}-workspace`));
+    return;
+  }
   out(workspaceFor(target, target.kind === 'skill' ? target.path : null));
 }
 

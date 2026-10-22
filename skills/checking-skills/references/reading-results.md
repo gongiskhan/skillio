@@ -9,6 +9,7 @@ Read this before turning eval numbers into conclusions. Agent runs vary from run
 - A delta near zero
 - Trigger results
 - Output results
+- Partial runs and run errors
 - Read the transcripts
 
 ## What the numbers mean
@@ -48,6 +49,12 @@ Three different causes, three different fixes:
 - A grader failing in both arms usually means the grader or the case is wrong. Read one run before blaming the skill.
 - High variance (1/3 or 2/3 on a case) means the instructions leave room for different interpretations. Look for the step where runs diverge.
 - Cost and time count. A skill that doubles tokens for a few points may not be worth it; say so.
+
+## Partial runs and run errors
+
+- **Exit code 2** means the run stopped early: the cost ceiling was hit or the credential was rejected. `partial` is true in the results. Don't compare a partial run with a full one; rerun with a higher `--max-cost` or fewer cases.
+- **"Reached maximum number of turns"** on a trigger case is normal: the case stops Claude after a few turns because only the first decision matters. It counts as an error in the table but the Skill grader still decides the case.
+- **Cases that reference something missing** (a skill, a file, a pasted checklist) measure the empty workspace, not the skill. Look for Claude saying it couldn't find something; add a fixture or put the content in the prompt.
 
 ## Read the transcripts
 

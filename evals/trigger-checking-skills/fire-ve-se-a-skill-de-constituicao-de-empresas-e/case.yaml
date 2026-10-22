@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: fire-ve-se-a-skill-de-constituicao-de-empresas-e
+context:
+  scaffold_script: fixture.sh

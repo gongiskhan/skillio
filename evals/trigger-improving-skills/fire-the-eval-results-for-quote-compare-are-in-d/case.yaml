@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: fire-the-eval-results-for-quote-compare-are-in-d
+context:
+  scaffold_script: fixture.sh

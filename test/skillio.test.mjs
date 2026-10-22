@@ -14,6 +14,7 @@ import { principles } from '../scripts/lib/report.mjs';
 import { similarity } from '../scripts/lib/collisions.mjs';
 import { writeTriggerCases, writeDecoy, listDecoys, listCases, classify, readResults, triggerMetrics } from '../scripts/lib/evals.mjs';
 import { detectTarget, workspaceFor } from '../scripts/lib/target.mjs';
+import { buildWrapper } from '../scripts/lib/wrapper.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const FIX = join(ROOT, 'test', 'fixtures');
@@ -237,10 +238,39 @@ test('decoys are skill folders the wrapper installs beside the plugin under test
   writeTriggerCases(join(root, 'evals'), 'hello', [{ query: 'please greet the new hire warmly, she started today', should_trigger: true }]);
   assert.equal(listDecoys(join(root, 'evals')).length, 1);
   assert.equal(listCases(join(root, 'evals')).length, 1, 'a decoy is not a case');
+  const wrapper = join(dirname(root), 'plug-workspace', 'skillio', 'wrapper');
   const r = spawnSync('node', [CLI, 'run-evals', root, '--dry-run'], { encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
-  const wrapper = join(dirname(root), 'plug-workspace', 'skillio', 'wrapper');
+  assert.ok(r.stdout.includes(wrapper), 'dry run names the wrapper');
+  assert.ok(!existsSync(wrapper), 'dry run writes nothing');
+  const built = buildWrapper(detectTarget(root), join(dirname(root), 'plug-workspace'));
+  assert.deepEqual(built.decoys, ['greeter']);
   assert.ok(existsSync(join(wrapper, 'skills', 'hello', 'SKILL.md')));
   assert.ok(existsSync(join(wrapper, 'skills', 'greeter', 'SKILL.md')));
-  assert.match(r.stdout, new RegExp(wrapper.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  const bad = spawnSync('node', [CLI, 'run-evals', root, '--max-cots', '5', '--dry-run'], { encoding: 'utf8' });
+  assert.notEqual(bad.status, 0, 'unknown flags are refused, not ignored');
+});
+
+test('trigger cases carry per-skill tuning and held-out tags, and fixtures become scaffolds', () => {
+  const ev = join(tmp(), 'evals');
+  writeTriggerCases(ev, 'hello', [
+    { query: 'check my greeter skill', should_trigger: true, fixture: 'greeter' },
+    { query: 'a held out wording', should_trigger: true, held_out: true },
+  ]);
+  const cases = listCases(ev);
+  const withFixture = cases.find(c => /check-my/.test(c.name));
+  assert.ok(withFixture.tags.includes('hello:tuning'));
+  assert.ok(cases.find(c => c.tags.includes('hello:held-out')));
+  const script = readFileSync(join(withFixture.dir, 'fixture.sh'), 'utf8');
+  assert.match(script, /skills\/greeter\/SKILL\.md/);
+  const sh = spawnSync('bash', [join(withFixture.dir, 'fixture.sh')], { cwd: tmp(), encoding: 'utf8' });
+  assert.equal(sh.status, 0, sh.stderr);
+  assert.match(readFileSync(join(withFixture.dir, 'case.yaml'), 'utf8'), /scaffold_script: fixture\.sh/);
+});
+
+test('workspace works for a skill that does not exist yet', () => {
+  const p = join(tmp(), 'new-skill');
+  const r = spawnSync('node', [CLI, 'workspace', p], { encoding: 'utf8' });
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout.trim(), join(dirname(p), 'new-skill-workspace'));
 });

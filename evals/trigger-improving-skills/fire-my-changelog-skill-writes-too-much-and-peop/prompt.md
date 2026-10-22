@@ -1,6 +1,6 @@
 ---
 description: "Should invoke improving-skills (held out)"
-tags: [trigger, should-fire, skill:improving-skills, held-out]
+tags: [trigger, should-fire, skill:improving-skills, held-out, improving-skills:held-out]
 max_turns: 4
 allowed_tools: [Read, Glob, Grep, Skill]
 ---

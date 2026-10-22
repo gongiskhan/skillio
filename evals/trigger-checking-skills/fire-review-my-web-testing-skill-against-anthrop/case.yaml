@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: fire-review-my-web-testing-skill-against-anthrop
+context:
+  scaffold_script: fixture.sh

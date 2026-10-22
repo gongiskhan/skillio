@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: fire-grade-my-release-notes-skill-does-it-beat-p
+context:
+  scaffold_script: fixture.sh

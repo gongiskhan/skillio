@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: fire-users-say-the-meeting-notes-skill-ignores-t
+context:
+  scaffold_script: fixture.sh

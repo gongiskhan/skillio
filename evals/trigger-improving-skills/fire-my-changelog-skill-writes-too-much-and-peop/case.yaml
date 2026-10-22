@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: fire-my-changelog-skill-writes-too-much-and-peop
+context:
+  scaffold_script: fixture.sh

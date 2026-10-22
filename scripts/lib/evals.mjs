@@ -165,8 +165,10 @@ export function writeTriggerCases(evalsRoot, skill, items, opts = {}) {
     const dir = join(group, name);
     if (existsSync(dir) && !opts.overwrite) continue;
     mkdirSync(join(dir, 'graders'), { recursive: true });
-    const tags = ['trigger', fire ? 'should-fire' : 'should-not-fire', `skill:${skill}`];
-    if (held) tags.push('held-out');
+    // `<skill>:tuning` and `<skill>:held-out` exist because --tag matches any
+    // tag: they are the only way to run one skill's tuning cases without its
+    // held-out cases (or the other way round) in a plugin with several skills.
+    const tags = ['trigger', fire ? 'should-fire' : 'should-not-fire', `skill:${skill}`, held ? 'held-out' : 'tuning', `${skill}:${held ? 'held-out' : 'tuning'}`];
     const fmLines = [
       '---',
       `description: ${yamlString(`${fire ? 'Should' : 'Should not'} invoke ${skill}${held ? ' (held out)' : ''}`)}`,
@@ -182,9 +184,42 @@ export function writeTriggerCases(evalsRoot, skill, items, opts = {}) {
       ? ['---', 'type: tool_used', 'tool: Skill', `input_match: ${match}`, '---', '']
       : ['---', 'type: tool_used', 'tool: Skill', `input_match: ${match}`, 'min: 0', 'max: 0', 'arm: both', '---', ''];
     writeFileSync(join(dir, 'graders', fire ? 'skill-fired.md' : 'skill-not-fired.md'), grader.join('\n'));
+    if (it.fixture) writeFixture(dir, name, it.fixture);
     written.push(dir);
   }
   return written;
+}
+
+// A fixture is a skill the prompt talks about ("check my release-notes
+// skill"). Runs start in an empty folder, so without it Claude searches, finds
+// nothing and gives up before deciding whether to load a skill, which measures
+// the empty folder rather than the description. The scaffold script creates
+// skills/<name>/SKILL.md in the run's workspace; plugin eval runs it only with
+// --scaffold, as the user.
+export function writeFixture(caseDir, caseName, fixture) {
+  const f = typeof fixture === 'string' ? { name: fixture } : fixture;
+  const name = slugify(f.name);
+  const words = name.replace(/-/g, ' ');
+  const description = f.description ?? `Writes ${words} for the team in the house format. Use when the user asks for ${words}.`;
+  const skillMd = [
+    '---', `name: ${name}`, `description: ${JSON.stringify(description)}`, '---', '',
+    `# ${words[0].toUpperCase()}${words.slice(1)}`, '',
+    '1. Read the input the user gives you.',
+    '2. Write the output in the house format: a title, three short sections, a closing line.',
+    '3. Keep it under one page.', '',
+  ].join('\n');
+  const script = [
+    '#!/usr/bin/env bash',
+    '# Creates the skill this case talks about, so the run has something to find.',
+    'set -euo pipefail',
+    `mkdir -p "skills/${name}"`,
+    `cat > "skills/${name}/SKILL.md" <<'SKILLIO_FIXTURE'`,
+    skillMd.trimEnd(),
+    'SKILLIO_FIXTURE',
+    '',
+  ].join('\n');
+  writeFileSync(join(caseDir, 'fixture.sh'), script);
+  writeFileSync(join(caseDir, 'case.yaml'), `schema_version: "1.1"\nname: ${caseName}\ncontext:\n  scaffold_script: fixture.sh\n`);
 }
 
 // A decoy is a skill folder under <evals>/decoys/ that copies a rival's

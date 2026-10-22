@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: fire-how-good-is-the-skill-i-wrote-for-the-csg-s
+context:
+  scaffold_script: fixture.sh

@@ -12,7 +12,8 @@
     "lint:self": "node scripts/skillio.mjs lint .",
     "check:self": "node scripts/skillio.mjs check .",
     "validate": "claude plugin validate .claude-plugin/plugin.json --strict && claude plugin validate .",
-    "evals:trigger": "node scripts/skillio.mjs run-evals . --tag trigger --ablation none",
+    "evals:trigger": "node scripts/skillio.mjs run-evals . --tag tuning --ablation none --scaffold",
+    "evals:held-out": "node scripts/skillio.mjs run-evals . --tag held-out --ablation none --scaffold",
     "vendor:sync": "node scripts/sync-vendor.mjs"
   }
 }

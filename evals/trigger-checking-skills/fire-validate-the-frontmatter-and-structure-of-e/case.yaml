@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: fire-validate-the-frontmatter-and-structure-of-e
+context:
+  scaffold_script: fixture.sh
