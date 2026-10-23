@@ -1,0 +1,209 @@
+[
+ {
+  "query": "can you check if https://staging.lumenshop.dev is working? we deploy tomorrow morning and I don't trust the last merge",
+  "should_trigger": true
+ },
+ {
+  "query": "is app.ekoa.io functioning well? a client said the documents page was slow and showed an error yesterday",
+  "should_trigger": true
+ },
+ {
+  "query": "I just merged PR #212 in ~/code/billing-portal, it changed the invoice filters. test it against localhost:3000 and add playwright tests for whatever it touched",
+  "should_trigger": true
+ },
+ {
+  "query": "QA the new onboarding flow on http://localhost:5173 before I show it to the team, the repo is this folder",
+  "should_trigger": true
+ },
+ {
+  "query": "test this app https://pixelpilot.app. I want proof it actually works on mobile, screenshots please",
+  "should_trigger": true
+ },
+ {
+  "query": "smoke test prod after the deploy: https://www.my-dentist-booking.pt, especially booking an appointment",
+  "should_trigger": true
+ },
+ {
+  "query": "write e2e tests for the checkout flow in this repo, run it on localhost:8080 first to see how it behaves",
+  "should_trigger": true
+ },
+ {
+  "query": "commits a1b2c3d..f9e8d7c touched the settings page and the profile avatar upload, can you verify nothing broke? app's on localhost:4000",
+  "should_trigger": true
+ },
+ {
+  "query": "my cofounder says the signup form on our landing page doesn't work on safari or something, can you take a look at https://getflowstate.io and tell me what's broken",
+  "should_trigger": true
+ },
+ {
+  "query": "here's the test login for staging (creds.env in this folder), go through the admin area of https://admin.staging.rota.dev and tell me if anything's off",
+  "should_trigger": true
+ },
+ {
+  "query": "users are complaining they can't upload a profile picture on https://app.clinicflow.pt since yesterday's release, can you see what's going on",
+  "should_trigger": true,
+  "held_out": true
+ },
+ {
+  "query": "before I demo to the investors tomorrow, run through https://demo.harmonika.app like a new user would and tell me anything embarrassing",
+  "should_trigger": true,
+  "held_out": true
+ },
+ {
+  "query": "the client portal at https://portal.brasilsalomao.pt feels broken on iphone, buttons don't do anything, check it out",
+  "should_trigger": true,
+  "held_out": true
+ },
+ {
+  "query": "does everything still work on localhost:3000 after I bumped next.js to 16? repo's here",
+  "should_trigger": true,
+  "held_out": true
+ },
+ {
+  "query": "go through the last three commits on main in this repo and make sure the features they added actually work in the browser, server is on :5000",
+  "should_trigger": true,
+  "held_out": true
+ },
+ {
+  "query": "o site https://www.casadamarilia.pt está a funcionar bem? um cliente disse que o formulário de marcação dá erro",
+  "should_trigger": true,
+  "held_out": true
+ },
+ {
+  "query": "convert our cypress tests in cypress/e2e to playwright, keep the same folder structure",
+  "should_trigger": false,
+  "held_out": true
+ },
+ {
+  "query": "check whether https://ekoa.io has good SEO meta tags and an og:image for link previews",
+  "should_trigger": false,
+  "held_out": true
+ },
+ {
+  "query": "my site https://getflowstate.io is down, is it just me? what's the http status from where you are",
+  "should_trigger": false,
+  "held_out": true
+ },
+ {
+  "query": "write a short qa checklist doc I can give to our intern for manual testing of releases",
+  "should_trigger": false,
+  "held_out": true
+ },
+ {
+  "query": "we shipped the new pricing page an hour ago at https://www.ekoa.io/precos, can you make sure nothing looks off and the plan buttons go where they should",
+  "should_trigger": true,
+  "held_out": true
+ },
+ {
+  "query": "can someone sanity check https://staging.tasklane.io/projects after the migration, I think the filters stopped working",
+  "should_trigger": true,
+  "held_out": true
+ },
+ {
+  "query": "pretend you're a lawyer signing up for the first time on https://app.ekoa.io and tell me where you'd get stuck",
+  "should_trigger": true,
+  "held_out": true
+ },
+ {
+  "query": "the booking widget on https://reservas.restaurantedomar.pt sometimes shows the wrong dates, a customer emailed about it twice. find out what's happening",
+  "should_trigger": true,
+  "held_out": true
+ },
+ {
+  "query": "PR 88 in this repo redid the login page, does it still work and is it covered by tests? dev server is localhost:3001",
+  "should_trigger": true,
+  "held_out": true
+ },
+ {
+  "query": "verifica se o https://app.contaflow.pt está tudo ok depois da actualização de ontem, especialmente as faturas",
+  "should_trigger": true,
+  "held_out": true
+ },
+ {
+  "query": "add a data-testid to every button in src/components so our tests can find them",
+  "should_trigger": false,
+  "held_out": true
+ },
+ {
+  "query": "take a full-page screenshot of https://stripe.com/pricing for my moodboard",
+  "should_trigger": false,
+  "held_out": true
+ },
+ {
+  "query": "explain the difference between playwright's page.waitForSelector and expect(locator).toBeVisible",
+  "should_trigger": false,
+  "held_out": true
+ },
+ {
+  "query": "our lighthouse performance score on https://ekoa.io dropped to 62, what are the usual culprits?",
+  "should_trigger": false,
+  "held_out": true
+ },
+ {
+  "query": "write unit tests with vitest for the formatCurrency function in src/utils/money.ts, it should handle negative numbers and euros",
+  "should_trigger": false
+ },
+ {
+  "query": "scrape all the product names and prices from https://www.worten.pt/promocoes into a csv for me",
+  "should_trigger": false
+ },
+ {
+  "query": "fill in the contact form on https://acme-logistics.com with my details asking for a quote for 3 pallets to Porto",
+  "should_trigger": false
+ },
+ {
+  "query": "run a load test against our api at https://api.ekoa.io, I want to know how many requests per second it handles before it falls over",
+  "should_trigger": false
+ },
+ {
+  "query": "why does my playwright test fail with \"strict mode violation: getByRole('button') resolved to 2 elements\"? the line is await page.getByRole('button').click()",
+  "should_trigger": false
+ },
+ {
+  "query": "can you do a security scan of https://staging.rota.dev for XSS and open redirects before the pentest next week",
+  "should_trigger": false
+ },
+ {
+  "query": "open https://news.ycombinator.com and summarize the top 5 stories for me",
+  "should_trigger": false
+ },
+ {
+  "query": "design a landing page for my yoga studio app with a hero section, pricing and testimonials",
+  "should_trigger": false
+ },
+ {
+  "query": "set up a github actions workflow that runs our existing playwright suite on every pull request",
+  "should_trigger": false
+ },
+ {
+  "query": "my react app shows a blank page after build and the console says 'Uncaught SyntaxError: Unexpected token <', what usually causes that?",
+  "should_trigger": false
+ },
+ {
+  "query": "login.spec.ts times out in CI since yesterday, can you fix it? it passes on my machine",
+  "should_trigger": false
+ },
+ {
+  "query": "three of our playwright tests have been flaky in github actions since we moved to node 22, make them stable",
+  "should_trigger": false,
+  "held_out": true
+ },
+ {
+  "query": "our support inbox has three emails saying the password reset link on https://app.lendwise.io opens a blank page. what's going on?",
+  "should_trigger": true
+ },
+ {
+  "query": "go through https://staging.mealkit.pt as someone placing their very first order and tell me which steps feel confusing",
+  "should_trigger": true
+ },
+ {
+  "query": "a couple of customers told us checkout on https://www.lojadocafe.pt freezes after they pick a delivery slot, can you look into it",
+  "should_trigger": true,
+  "held_out": true
+ },
+ {
+  "query": "act like a teacher setting up their first class on https://app.classnote.io and tell me what would trip you up",
+  "should_trigger": true,
+  "held_out": true
+ }
+]

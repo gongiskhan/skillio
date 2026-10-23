@@ -31,8 +31,11 @@ Talk to Claude normally; the skills trigger on what you ask.
 | "Make a skill that turns meeting notes into action items", "turn what we just did into a skill" | building-skills | Runs skill-creator (interview, draft, test runs, review viewer), then lints and validates, writes a trigger suite with near misses and held-out cases, writes output cases with `claude plugin eval init`'s interview, runs them with `claude plugin eval`, gets an independent review and packages the result |
 | "Check my release-notes skill", "is this SKILL.md ready to publish?" | checking-skills | Runs the linter, `claude plugin validate` and `details`, `/skill-doctor`, skill-creator's validator, description overlap with your installed skills, `/claude-api prompt-audit` (plus `/doctor prompt-audit` for skills in a project), the eval suite against a no-skill baseline, and a fresh-eyes reviewer agent; writes one report with the reason behind every finding |
 | "My skill never triggers on X", "make it leaner", "act on the check report" | improving-skills | Gathers evidence (eval runs, transcripts, a prompt audit, real-use notes), diagnoses each failure, snapshots, turns failures into cases, changes one thing at a time and keeps it only if it beats the snapshot on held-out cases |
+| "Test this app https://...", "is the app working after the deploy?", "test PR 123 against localhost:3000" | web-testing | Drives user journeys in a real browser with Playwright, records video and step screenshots, judges each step from the screenshots, reports bugs with that evidence, then turns verified journeys into tests in the project's suite and runs them. Handles test logins without the password entering the conversation |
 
-You can also call them directly: `/skillio:building-skills`, `/skillio:checking-skills`, `/skillio:improving-skills`.
+You can also call them directly: `/skillio:building-skills`, `/skillio:checking-skills`, `/skillio:improving-skills`, `/skillio:web-testing`.
+
+web-testing is not a skill about skills. It lives here because it was built and measured with Skillio, and it is the worked example of the whole loop: [docs/web-testing.md](docs/web-testing.md) has the numbers.
 
 The CLI behind them works on its own:
 
@@ -57,6 +60,7 @@ skills/
   building-skills/     skill-creator first, then lint, evals, review, packaging
   checking-skills/     every check in one report, plus the review rubric
   improving-skills/    diagnosis table, tuning-loop rules
+  web-testing/         browser testing with screenshot and video evidence, then Playwright tests
 agents/skill-reviewer.md   reads a skill cold and scores it on ten dimensions
 hooks/hooks.json           lints a skill after every Write or Edit inside it
 scripts/skillio.mjs        the CLI; scripts/lib/ has the linter, eval tools, reports
@@ -64,7 +68,7 @@ docs/guide.md              what makes a good skill, explained, with plain-words 
 docs/principles.md         one section per check: what, why, in plain words, how to fix
 scripts/lib/claude.mjs     every call into Claude Code, with the fallbacks
 vendor/                    open-source skills about skills, pinned by commit
-evals/                     Skillio's own trigger suite, with a skill-creator decoy
+evals/                     trigger suites for all four skills, with skill-creator and browser decoys
 test/                      unit tests and deliberately broken fixtures
 ```
 
@@ -78,7 +82,7 @@ test/                      unit tests and deliberately broken fixtures
 
 **Trust is asked, never assumed.** Evals run a plugin's hooks and scripts on your machine as you. `run-evals` passes `--trust-plugin` only with `--trust`, and the skills add that after you say yes, which is Claude Code's own rule for eval runs.
 
-**Third-party skills live in `vendor/`, not `skills/`.** Everything under `skills/` becomes a skill, and six more skills about skills would compete with these three for the same requests. In `vendor/` they are read when a Skillio skill needs them and never fight for triggering. See [vendor/README.md](vendor/README.md).
+**Third-party skills live in `vendor/`, not `skills/`.** Everything under `skills/` becomes a skill, and six more skills about skills would compete with these for the same requests. In `vendor/` they are read when a Skillio skill needs them and never fight for triggering. See [vendor/README.md](vendor/README.md).
 
 **Decoys make routing testable.** If a rival skill will compete for the same requests (skill-creator, the Claude app's built-in document skills, a browser skill), a decoy with its description is installed next to the skill under test in every eval case. A should-fire case then passes only if Claude picks your skill over the rival.
 

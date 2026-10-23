@@ -4,14 +4,14 @@ Instructions for anyone (person or agent) changing this repo.
 
 ## Layout
 
-- `skills/` holds the three skills the plugin loads: `building-skills`, `checking-skills`, `improving-skills`. Every folder here becomes a skill, so nothing else goes in it.
+- `skills/` holds the skills the plugin loads: `building-skills`, `checking-skills`, `improving-skills`, and `web-testing` (browser testing, built and measured with Skillio; its scripts are Node and need Playwright only when they run). Every folder here becomes a skill, so nothing else goes in it.
 - `agents/skill-reviewer.md` is the fresh-eyes reviewer checking-skills starts.
 - `hooks/hooks.json` runs `scripts/hook-lint.mjs` after Write and Edit.
 - `scripts/skillio.mjs` is the CLI every skill calls; `scripts/lib/` holds its modules. Node only, no dependencies, so it runs from a hook without an install step.
 - `scripts/lib/claude.mjs` is the only place that calls Claude Code (validate, details, eval, the prompt audits, `/skill-doctor`, finding skill-creator). Every function there degrades to "not available" when Claude Code is missing or too old; callers skip and say so once. Test the fallback with `SKILLIO_CLAUDE=off`.
 - `docs/principles.md` has one section per lint rule; `docs/guide.md` is the long-form explanation.
 - `vendor/` holds third-party skills read as reference. Never edit them in place: run `node scripts/sync-vendor.mjs` to update, review the diff, commit it on its own.
-- `evals/` is Skillio's own `claude plugin eval` suite: trigger cases for each skill, generated from `evals/sets/*.json`, plus a decoy of skill-creator in `evals/decoys/`.
+- `evals/` is Skillio's own `claude plugin eval` suite: trigger cases for each skill, generated from `evals/sets/*.json`, plus decoys of skill-creator and of a browser-automation skill in `evals/decoys/`.
 - `test/` is the unit test suite; fixtures under `test/fixtures/` are deliberately broken skills.
 
 ## Before committing

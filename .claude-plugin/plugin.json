@@ -2,8 +2,8 @@
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "skillio",
   "displayName": "Skillio",
-  "version": "0.2.0",
-  "description": "Skills for working on skills: build them with Anthropic's skill-creator plus a measured eval suite, check them with every available validator and an independent reviewer, and improve them from evidence. Lints every SKILL.md as you edit it.",
+  "version": "0.3.0",
+  "description": "Skills for working on skills: build them with Anthropic's skill-creator plus a measured eval suite, check them with every available validator and an independent reviewer, and improve them from evidence. Lints every SKILL.md as you edit it. Also ships web-testing, a browser-testing skill built and measured with Skillio.",
   "author": {
     "name": "Gonçalo Paraízo Gomes",
     "url": "https://github.com/gongiskhan"
@@ -17,6 +17,8 @@
     "skill-creator",
     "evals",
     "lint",
-    "plugin-eval"
+    "plugin-eval",
+    "web-testing",
+    "playwright"
   ]
 }
