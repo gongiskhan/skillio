@@ -10,7 +10,7 @@
     {
       "name": "skillio",
       "source": "./",
-      "description": "Build skills with skill-creator plus measured evals, check them with every validator, improve them from evidence.",
+      "description": "Build skills with skill-creator plus measured evals, check them with every validator, improve them from evidence. Includes web-testing, browser testing with screenshot evidence and Playwright tests.",
       "category": "development",
       "tags": ["skills", "evals"]
     }

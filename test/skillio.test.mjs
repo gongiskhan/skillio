@@ -168,7 +168,7 @@ test('workspaces sit beside the skill or plugin, never inside it', () => {
   assert.equal(workspaceFor(t, t.path), join(FIX, 'good-skill-workspace'));
   const p = detectTarget(ROOT);
   assert.equal(p.kind, 'plugin');
-  assert.equal(p.skills.length, 3);
+  assert.equal(p.skills.length, 4);
   assert.ok(workspaceFor(p).endsWith('skillio-workspace'));
   assert.ok(!workspaceFor(p).startsWith(ROOT + '/'));
 });

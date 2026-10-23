@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 (2026-10-23)
+
+Adds `web-testing`, a skill built with skill-creator and measured and improved with Skillio.
+
+- `skills/web-testing`: tests a running web app in a real browser with Playwright, with a video per journey and a screenshot per step, judges each step from the screenshots, reports bugs with that evidence, and turns verified journeys into tests in the project's suite. Scopes to a URL, a commit, a range or a PR, and handles test logins without the password entering the conversation. Its scripts are plain Node; Playwright is needed only where they run.
+- `evals/trigger-web-testing/`: 46 trigger cases from `evals/sets/web-testing.json` (26 should fire, 20 near misses, 23 held out), and a browser-automation decoy in `evals/decoys/` that now sits next to every case.
+- `docs/web-testing.md`: how to use it, how it was measured, its trigger results and known gaps.
+- The other skills' descriptions are unchanged, so the trigger results in evals/RESULTS.md still apply to them.
+
 ## 0.2.0 (2026-10-23)
 
 Uses Claude Code's own tools wherever they fit, and falls back cleanly without them.
