@@ -1,6 +1,6 @@
 {
   "name": "skillio",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Claude Code plugin with skills for building, checking and improving Agent Skills.",
   "type": "module",
@@ -12,8 +12,8 @@
     "lint:self": "node scripts/skillio.mjs lint .",
     "check:self": "node scripts/skillio.mjs check .",
     "validate": "claude plugin validate .claude-plugin/plugin.json --strict && claude plugin validate .",
-    "evals:trigger": "node scripts/skillio.mjs run-evals . --tag tuning --ablation none --scaffold",
-    "evals:held-out": "node scripts/skillio.mjs run-evals . --tag held-out --ablation none --scaffold",
+    "evals:trigger": "node scripts/skillio.mjs run-evals . --trust --tag tuning --ablation none --scaffold",
+    "evals:held-out": "node scripts/skillio.mjs run-evals . --trust --tag held-out --ablation none --scaffold",
     "vendor:sync": "node scripts/sync-vendor.mjs"
   }
 }

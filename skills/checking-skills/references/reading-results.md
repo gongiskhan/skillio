@@ -52,8 +52,10 @@ Three different causes, three different fixes:
 
 ## Partial runs and run errors
 
+- **"Read this first"** at the top of a Skillio summary means the run measured nothing about the skill: plugin eval reported that the plugin didn't load (`suite.plugins` empty, or a `manifest_invalid`, `disabled_by_default` or `will_not_load` problem), or a case "cannot pass with the granted tools" (a file grader with no tool that can write the file). Fix it and rerun before reading any number.
 - **Exit code 2** means the run stopped early: the cost ceiling was hit or the credential was rejected. `partial` is true in the results. Don't compare a partial run with a full one; rerun with a higher `--max-cost` or fewer cases.
 - **"Reached maximum number of turns"** on a trigger case is normal: the case stops Claude after a few turns because only the first decision matters. It counts as an error in the table but the Skill grader still decides the case.
+- **A judge that disagrees with you**: llm graders use Sonnet through `skillio run-evals` unless another model is passed. If you would have scored a run differently, the rubric is not ready; rewrite it as concrete PASS if / FAIL if claims and pilot again.
 - **Cases that reference something missing** (a skill, a file, a pasted checklist) measure the empty workspace, not the skill. Look for Claude saying it couldn't find something; add a fixture or put the content in the prompt.
 
 ## Read the transcripts

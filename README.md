@@ -20,7 +20,7 @@ claude plugin install skillio@skillio
 
 The repository is private, so the machine needs git access to it (`gh auth login`, or an SSH key on the GitHub account). To work on Skillio itself without installing, load the working copy for one session: `claude --plugin-dir ~/path/to/skillio`.
 
-Requirements: Claude Code 2.1.269 or later (for `claude plugin eval`), Node 18 or later, git. Optional: Python 3 with PyYAML for skill-creator's scripts, `zip` for packaging.
+Requirements: Node 18 or later and git. Claude Code 2.1.269 or later for evals, 2.1.283 or later for the prompt audits. Optional: Python 3 with PyYAML for skill-creator's scripts, `zip` for packaging. Without Claude Code (in another editor, say), the linter, overlap and suite checks, skill-creator and packaging still work; `node scripts/skillio.mjs tools` shows what this machine can run.
 
 ## Use
 
@@ -28,20 +28,23 @@ Talk to Claude normally; the skills trigger on what you ask.
 
 | You say | Skill | What happens |
 | --- | --- | --- |
-| "Make a skill that turns meeting notes into action items", "turn what we just did into a skill" | building-skills | Runs skill-creator (interview, draft, test runs, review viewer), then lints, writes a trigger suite with near misses and held-out cases, runs it with `claude plugin eval`, gets an independent review and packages the result |
-| "Check my release-notes skill", "is this SKILL.md ready to publish?" | checking-skills | Runs the linter, `claude plugin validate`, skill-creator's validator, description overlap with your installed skills, the eval suite against a no-skill baseline, and a fresh-eyes reviewer agent; writes one report with the reason behind every finding |
-| "My skill never triggers on X", "make it leaner", "act on the check report" | improving-skills | Gathers evidence, diagnoses each failure, snapshots, turns failures into cases, changes one thing at a time and keeps it only if it beats the snapshot on held-out cases |
+| "Make a skill that turns meeting notes into action items", "turn what we just did into a skill" | building-skills | Runs skill-creator (interview, draft, test runs, review viewer), then lints and validates, writes a trigger suite with near misses and held-out cases, writes output cases with `claude plugin eval init`'s interview, runs them with `claude plugin eval`, gets an independent review and packages the result |
+| "Check my release-notes skill", "is this SKILL.md ready to publish?" | checking-skills | Runs the linter, `claude plugin validate` and `details`, `/skill-doctor`, skill-creator's validator, description overlap with your installed skills, `/claude-api prompt-audit` (plus `/doctor prompt-audit` for skills in a project), the eval suite against a no-skill baseline, and a fresh-eyes reviewer agent; writes one report with the reason behind every finding |
+| "My skill never triggers on X", "make it leaner", "act on the check report" | improving-skills | Gathers evidence (eval runs, transcripts, a prompt audit, real-use notes), diagnoses each failure, snapshots, turns failures into cases, changes one thing at a time and keeps it only if it beats the snapshot on held-out cases |
 
 You can also call them directly: `/skillio:building-skills`, `/skillio:checking-skills`, `/skillio:improving-skills`.
 
 The CLI behind them works on its own:
 
 ```bash
+node scripts/skillio.mjs tools
 node scripts/skillio.mjs lint path/to/skill --target claude-ai
-node scripts/skillio.mjs check path/to/plugin
+node scripts/skillio.mjs check path/to/plugin --strict
+node scripts/skillio.mjs audit path/to/skill --scope both
 node scripts/skillio.mjs collisions path/to/skill
 node scripts/skillio.mjs trigger-cases path/to/plugin --skill my-skill --from trigger-set.json
-node scripts/skillio.mjs run-evals path/to/plugin --tag trigger --ablation none
+node scripts/skillio.mjs eval-init path/to/plugin
+node scripts/skillio.mjs run-evals path/to/plugin --trust --tag trigger --ablation none
 node scripts/skillio.mjs package path/to/skill
 ```
 
@@ -59,6 +62,7 @@ hooks/hooks.json           lints a skill after every Write or Edit inside it
 scripts/skillio.mjs        the CLI; scripts/lib/ has the linter, eval tools, reports
 docs/guide.md              what makes a good skill, explained, with plain-words summaries
 docs/principles.md         one section per check: what, why, in plain words, how to fix
+scripts/lib/claude.mjs     every call into Claude Code, with the fallbacks
 vendor/                    open-source skills about skills, pinned by commit
 evals/                     Skillio's own trigger suite, with a skill-creator decoy
 test/                      unit tests and deliberately broken fixtures
@@ -66,7 +70,13 @@ test/                      unit tests and deliberately broken fixtures
 
 ## Design decisions
 
+**Claude Code's tools first.** Validation, context cost, evals, the eval-authoring interview, prompt audits and `/skill-doctor` all come from Claude Code, so they judge a skill the way Claude Code will load it. Skillio runs each one where it fits (the hook even validates a SKILL.md after every edit) and adds what they don't check. Without Claude Code it falls back to the checks that don't need it and says what wasn't covered.
+
 **skill-creator does the drafting; plugin eval does the measuring.** skill-creator is Anthropic's tool for writing skills and is good at it. Its description optimiser, though, tests a description by installing it as a slash command, not by loading it as a skill; in one measured case it scored 17% recall for a description that real skill loading triggered every time. `claude plugin eval` loads skills the way a session does, runs each case with and without the plugin, and works in CI, so it's the suite of record.
+
+**skill-creator is preferred, not required.** If the skill-creator plugin is installed, building-skills uses it, since Claude Code keeps it updated; otherwise it uses the pinned copy in `vendor/` (the same content today). It isn't declared as a dependency: that would install a second skill competing for every request about skills, and the marketplace name differs between setups.
+
+**Trust is asked, never assumed.** Evals run a plugin's hooks and scripts on your machine as you. `run-evals` passes `--trust-plugin` only with `--trust`, and the skills add that after you say yes, which is Claude Code's own rule for eval runs.
 
 **Third-party skills live in `vendor/`, not `skills/`.** Everything under `skills/` becomes a skill, and six more skills about skills would compete with these three for the same requests. In `vendor/` they are read when a Skillio skill needs them and never fight for triggering. See [vendor/README.md](vendor/README.md).
 

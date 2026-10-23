@@ -15,11 +15,14 @@ import { similarity } from '../scripts/lib/collisions.mjs';
 import { writeTriggerCases, writeDecoy, listDecoys, listCases, classify, readResults, triggerMetrics } from '../scripts/lib/evals.mjs';
 import { detectTarget, workspaceFor } from '../scripts/lib/target.mjs';
 import { buildWrapper } from '../scripts/lib/wrapper.mjs';
+import { compareVersions, cleanEnv, parseDetails, validateFindings, claudeInfo } from '../scripts/lib/claude.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const FIX = join(ROOT, 'test', 'fixtures');
 const CLI = join(ROOT, 'scripts', 'skillio.mjs');
 const tmp = () => mkdtempSync(join(tmpdir(), 'skillio-test-'));
+const NO_CLAUDE = { ...process.env, SKILLIO_CLAUDE: 'off' };
+const HAS_CLAUDE = claudeInfo().found;
 const ids = r => new Set(r.findings.map(f => f.id));
 
 function badSkillCopy() {
@@ -242,6 +245,10 @@ test('decoys are skill folders the wrapper installs beside the plugin under test
   const r = spawnSync('node', [CLI, 'run-evals', root, '--dry-run'], { encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.ok(r.stdout.includes(wrapper), 'dry run names the wrapper');
+  assert.doesNotMatch(r.stdout, /--trust-plugin/, 'trust is never assumed');
+  assert.match(r.stdout, /--judge-model sonnet/);
+  const trusted = spawnSync('node', [CLI, 'run-evals', root, '--dry-run', '--trust'], { encoding: 'utf8' });
+  assert.match(trusted.stdout, /--trust-plugin/);
   assert.ok(!existsSync(wrapper), 'dry run writes nothing');
   const built = buildWrapper(detectTarget(root), join(dirname(root), 'plug-workspace'));
   assert.deepEqual(built.decoys, ['greeter']);
@@ -273,4 +280,101 @@ test('workspace works for a skill that does not exist yet', () => {
   const r = spawnSync('node', [CLI, 'workspace', p], { encoding: 'utf8' });
   assert.equal(r.status, 0);
   assert.equal(r.stdout.trim(), join(dirname(p), 'new-skill-workspace'));
+});
+
+test('version gates and the child-session environment', () => {
+  assert.equal(compareVersions('2.1.283', '2.1.269'), 1);
+  assert.equal(compareVersions('2.1.269', '2.1.269'), 0);
+  assert.equal(compareVersions('2.1.99', '2.1.269'), -1);
+  const env = cleanEnv({ CLAUDECODE: '1', CCR_SESSION: 'x', CLAUDE_CODE_ENTRYPOINT: 'remote', CLAUDE_CODE_OAUTH_TOKEN: 't', CLAUDE_CODE_USE_BEDROCK: '1', PATH: '/bin' });
+  assert.equal(env.CLAUDECODE, undefined);
+  assert.equal(env.CCR_SESSION, undefined);
+  assert.equal(env.CLAUDE_CODE_ENTRYPOINT, undefined);
+  assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, 't', 'credentials stay');
+  assert.equal(env.CLAUDE_CODE_USE_BEDROCK, '1', 'provider choice stays');
+  assert.equal(env.CLAUDE_CODE_ENABLE_CFC, '0', 'no browser in child sessions');
+});
+
+test('plugin details output is parsed into always-on and on-invoke tokens', () => {
+  const d = parseDetails(['Projected token cost', '  Always-on:   ~757 tok   added to every session', '', 'Per-component (rounded)',
+    '  component         always-on  on-invoke', '  building-skills        ~220      ~3.5k', '  notes                   ~40       < 20', '', '  On-invoke cost is paid each time a skill or agent fires.'].join('\n'));
+  assert.equal(d.alwaysOn, 757);
+  assert.deepEqual(d.components.map(c => [c.name, c.alwaysOn, c.onInvoke]), [['building-skills', 220, 3500], ['notes', 40, 20]]);
+});
+
+test('validator findings can be narrowed to one skill in a shared folder', () => {
+  const json = {
+    manifest: { file: '/x/.claude-plugin/plugin.json', errors: [{ path: 'name', message: 'bad name' }], warnings: [] },
+    contents: [
+      { file: '/x/skills/mine/SKILL.md', errors: [{ path: 'frontmatter', message: 'broken' }], warnings: [] },
+      { file: '/x/skills/other/SKILL.md', errors: [{ path: 'frontmatter', message: 'also broken' }], warnings: [] },
+    ],
+    directory: { findings: [{ severity: 'error', title: 'README missing', file: 'README.md', fix: 'add one' }] },
+  };
+  const mine = validateFindings({ exit: 1, json }, 'skill', { only: '/x/skills/mine' });
+  assert.deepEqual(mine.map(f => f.message), ['name: bad name', 'frontmatter: broken', '[plugin directory] README missing: add one']);
+  assert.equal(mine.at(-1).severity, 'warn', 'directory listing checks only warn without --profile');
+  const comp = validateFindings({ exit: 1, json }, 'skill', { componentsOnly: true, only: '/x/skills/mine' });
+  assert.deepEqual(comp.map(f => f.message), ['frontmatter: broken']);
+  const prof = validateFindings({ exit: 1, json }, 'plugin', { profile: 'directory' });
+  assert.equal(prof.at(-1).severity, 'error');
+  assert.deepEqual(validateFindings({ exit: 2, validatorError: 'boom' }, 'x'), [], 'a broken validator is not a finding');
+});
+
+test('without Claude Code, tools and check fall back quietly to the static checks', () => {
+  const t = spawnSync('node', [CLI, 'tools', '--json'], { encoding: 'utf8', env: NO_CLAUDE });
+  assert.equal(t.status, 0);
+  const info = JSON.parse(t.stdout);
+  assert.equal(info.claude.found, false);
+  assert.equal(info.skillCreator.source, 'vendored');
+  const good = join(tmp(), 'good-skill');
+  cpSync(join(FIX, 'good-skill'), good, { recursive: true });
+  const r = spawnSync('node', [CLI, 'check', good, '--json', '--root', tmp()], { encoding: 'utf8', env: NO_CLAUDE });
+  assert.equal(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout);
+  assert.ok(out.ran.some(([k, v]) => k === 'Claude Code checks' && /not run/.test(v)));
+  assert.ok(!out.findings.some(f => f.id === 'V000'));
+  assert.ok(!out.findings.some(f => f.severity === 'error'), 'a missing tool is never an error');
+  const ev = spawnSync('node', [CLI, 'run-evals', good, '--trust'], { encoding: 'utf8', env: NO_CLAUDE });
+  assert.notEqual(ev.status, 0);
+  assert.match(ev.stderr, /need Claude Code/);
+  const au = spawnSync('node', [CLI, 'audit', good], { encoding: 'utf8', env: NO_CLAUDE });
+  assert.equal(au.status, 0);
+  assert.match(au.stdout, /not run/);
+});
+
+test('results warn when the plugin never loaded', () => {
+  const dir = tmp();
+  const agg = join(dir, 'aggregate-result.json');
+  writeFileSync(agg, JSON.stringify({ partial: false, suite: { plugins: [{ name: 'p', problem: { code: 'will_not_load' } }] }, cases: [], aggregates: {} }));
+  writeFileSync(join(dir, 'run.log'), '⚠ case out-1 cannot pass with the granted tools: file_exists needs Write\n');
+  const r = spawnSync('node', [CLI, 'results', agg, '--path', join(FIX, 'good-skill')], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /Read this first/);
+  assert.match(r.stdout, /will_not_load/);
+  assert.match(r.stdout, /cannot pass with the granted tools/);
+});
+
+test('with Claude Code, a skill is validated in place and a broken sibling is not its problem', { skip: !HAS_CLAUDE && 'claude not installed' }, () => {
+  const parent = tmp();
+  cpSync(join(FIX, 'good-skill'), join(parent, 'good-skill'), { recursive: true });
+  mkdirSync(join(parent, 'broken'));
+  writeFileSync(join(parent, 'broken', 'SKILL.md'), '---\nname: broken\ndescription: "unterminated\n---\n');
+  const r = spawnSync('node', [CLI, 'check', join(parent, 'good-skill'), '--json', '--root', tmp()], { encoding: 'utf8' });
+  const out = JSON.parse(r.stdout);
+  assert.ok(out.ran.some(([k, v]) => k === 'claude plugin validate' && /^passed/.test(v)), JSON.stringify(out.ran));
+  const b = spawnSync('node', [CLI, 'check', join(parent, 'broken'), '--json', '--root', tmp()], { encoding: 'utf8' });
+  assert.equal(b.status, 1);
+});
+
+test('with Claude Code, the hook validates a plugin manifest after it is edited', { skip: !HAS_CLAUDE && 'claude not installed' }, () => {
+  const root = join(tmp(), 'plug');
+  mkdirSync(join(root, '.claude-plugin'), { recursive: true });
+  writeFileSync(join(root, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'plug', hooks: 5 }));
+  const r = spawnSync('node', [join(ROOT, 'scripts', 'hook-lint.mjs')], {
+    input: JSON.stringify({ tool_input: { file_path: join(root, '.claude-plugin', 'plugin.json') }, cwd: root }),
+    encoding: 'utf8', env: { ...process.env, CLAUDE_PLUGIN_DATA: tmp() },
+  });
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /ERROR V000/);
 });

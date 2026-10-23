@@ -77,4 +77,4 @@ Before changing the skill, rule out the eval:
 
 Fix the eval, re-grade, and note it in the changelog with the old result kept visible.
 
-The environment can fail too. Eval runs started from a cloud Claude Code session once inherited variables that made Claude say it couldn't create skills; `skillio run-evals` strips them now, but if a transcript shows Claude refusing something a normal session does, check the environment before the skill. Changing an expectation is fine; hiding that you did is not.
+The environment can fail too. If a transcript shows Claude refusing something a normal session does (saying it can't create skills, for example), check the environment before the skill: `skillio run-evals` gives child sessions a clean environment, but runs started another way may not. Changing an expectation is fine; hiding that you did is not.

@@ -14,20 +14,30 @@ import { inventory, compare, listingSize, defaultRoots } from './lib/collisions.
 import { suiteSummary, writeTriggerCases, writeDecoy, listDecoys, readResults, triggerMetrics, listCases, classify, evalDir, readPluginJson, pct, lookupCase } from './lib/evals.mjs';
 import { renderFindings, terminalFindings, counts, verdict, PLUGIN_ROOT } from './lib/report.mjs';
 import { buildWrapper } from './lib/wrapper.mjs';
+import { claudeInfo, cleanEnv, validate, validateFindings, pluginDetails, skillCreator, promptAudit, skillDoctor, gitRoot, MIN } from './lib/claude.mjs';
 
 const HELP = `Skillio: tools for building, checking and improving Agent Skills.
 
 Usage: node skillio.mjs <command> [options]
+
+  tools [--json]            What this machine can run: Claude Code version and which of
+                            its tools are usable, where skill-creator is, python, zip.
+                            Without Claude Code the static checks still work.
 
 Static checks (free, no model calls)
   lint <path...>            Lint skills. --target claude-code|claude-ai|portable, --json
   collisions <path>         Compare a skill's description with every installed skill
   inventory                 List the skills Claude Code would see, and the listing size
   check <path>              Everything static: lint, collisions, eval-suite health,
-                            claude plugin validate, skill-creator's validator.
-                            Writes a report to the workspace. --target, --json, --no-claude
+                            claude plugin validate and details, /skill-doctor,
+                            skill-creator's validator. Writes a report to the workspace.
+                            --target, --json, --strict, --for-directory, --no-claude
 
-Evals (each run is a real model call on your account)
+Model calls (each one is billed to your account)
+  audit <path> [--scope skill|setup|both] [--model m]
+                            /claude-api prompt-audit on the skill or plugin (instructions
+                            written for older models); setup adds /doctor prompt-audit
+                            for the project's whole configuration. Read-only.
   evals <path>              Show the eval suite for a skill or plugin and what it covers
   trigger-cases <path> --skill <name> --from <file.json> [--into dir] [--runs n] [--overwrite]
                             Turn a trigger set ([{query, should_trigger, held_out}], the
@@ -35,11 +45,15 @@ Evals (each run is a real model call on your account)
   decoy <path> --name <n> --description <text>
                             Add a decoy: a stand-in skill with a rival's description that
                             run-evals installs beside the skill under test
-  run-evals <path> [--tag t]... [--case glob] [--runs n] [-j n] [--max-cost usd]
-            [--ablation none|with-without] [--model m] [--judge-model m] [--publish]
-            [--allow-tools t...] [--scaffold] [--evals-from dir] [--label name] [--dry-run]
+  eval-init <path> [--bare name]
+                            Author output cases with claude plugin eval init's interview
+  run-evals <path> --trust [--tag t]... [--case glob] [--runs n] [-j n] [--max-cost usd]
+            [--ablation none|with-without] [--model m] [--judge-model m] [--threshold x]
+            [--allow-tools t...] [--scaffold] [--evals-from dir] [--label name] [--publish]
+            [--dry-run]
                             Run claude plugin eval isolated from your browser and
-                            messaging, results into the workspace, then summarise
+                            messaging, results into the workspace, then summarise.
+                            --trust only after the user says they trust the plugin.
   results <aggregate-result.json> [--path <plugin-or-skill>]
                             Summarise a finished run: trigger recall, false fires, pass^k
 
@@ -232,34 +246,76 @@ function cmdEvals(pos, opts) {
   }
 }
 
-// --- external validators ------------------------------------------------------------
+// --- Claude Code validators -----------------------------------------------------------
 
-function hasClaude() {
-  const r = spawnSync('claude', ['--version'], { encoding: 'utf8' });
-  return r.status === 0 ? r.stdout.trim() : null;
+// Runs claude plugin validate on whatever the target is, the way Claude Code
+// will load it. A bare skill is validated through its parent folder (the
+// validator checks the skills, agents and commands in a directory), keeping
+// only the findings for files inside the skill.
+function validateTarget(target, ws, { profile = null, strict = false } = {}) {
+  const runs = [];
+  const run = (path, label, o = {}) => {
+    const v = validate(path, { strict, profile: o.allowProfile ? profile : null });
+    const findings = validateFindings(v, label, { ...o, profile: o.allowProfile ? profile : null });
+    // When only part of the folder is ours (a skill's parent folder, a
+    // wrapper), the exit code also covers the rest; judge by our findings.
+    const failed = v.exit === 1 && (o.only || o.componentsOnly ? findings.some(f => f.severity === 'error') : true);
+    runs.push({ label, v, findings, failed });
+  };
+  const pj = root => join(root, '.claude-plugin', 'plugin.json');
+  if (target.kind === 'plugin') {
+    // With a marketplace.json beside it, validating the folder checks the
+    // marketplace; the plugin manifest needs its own pass.
+    // Every mode also checks the plugin's skills, agents and commands.
+    run(target.marketplace ? pj(target.pluginRoot) : target.pluginRoot, 'plugin', { allowProfile: true });
+    if (target.marketplace) run(target.pluginRoot, 'marketplace');
+  } else if (target.kind === 'skill' && target.pluginRoot) {
+    const hasMarket = existsSync(join(target.pluginRoot, '.claude-plugin', 'marketplace.json'));
+    run(hasMarket ? pj(target.pluginRoot) : target.pluginRoot, 'enclosing plugin', { only: target.path });
+  } else if (target.kind === 'skill') {
+    const parent = dirname(target.path);
+    if (existsSync(join(parent, '.claude-plugin'))) {
+      run(buildWrapper(target, ws, { withDecoys: false }).root, 'skill', { componentsOnly: true });
+    } else {
+      run(parent, 'skill', { componentsOnly: true, only: target.path });
+    }
+  } else if (target.kind === 'marketplace') {
+    run(target.path, 'marketplace');
+    for (const pr of target.plugins) run(pj(pr), basename(pr), { allowProfile: true });
+  } else {
+    run(target.path, 'skills folder', { componentsOnly: true });
+  }
+  const findings = runs.flatMap(r => r.findings);
+  const broken = runs.filter(r => r.v.validatorError);
+  const failed = runs.some(r => r.failed);
+  const errs = findings.filter(f => f.severity === 'error').length;
+  let summary = failed ? `failed (${errs} error(s))` : 'passed';
+  if (strict) summary += ' with --strict';
+  if (profile) summary += `, --profile ${profile}`;
+  if (broken.length) summary += `; validator error on ${broken.map(r => r.label).join(', ')}: ${broken[0].v.validatorError.split('\n')[0]}`;
+  return { findings, summary, failed };
 }
 
-function runValidate(dir, file) {
-  const r = spawnSync('claude', ['plugin', 'validate', file ?? dir, '--json'], { encoding: 'utf8', cwd: dir });
-  try { return JSON.parse(r.stdout); } catch { return { success: r.status === 0, raw: (r.stdout + r.stderr).trim().slice(0, 2000) }; }
+// Claude Code's own context-cost estimate for the target.
+function detailsFor(target, ws) {
+  if (target.pluginRoot) {
+    const name = target.plugin?.name ?? readPluginJson(target.pluginRoot)?.name;
+    const d = name ? pluginDetails(target.pluginRoot, name) : null;
+    if (d && target.kind === 'skill') d.focus = lintSkill(target.path).info.name ?? basename(target.path);
+    return d;
+  }
+  if (target.kind === 'skill') {
+    const w = buildWrapper(target, ws, { withDecoys: false });
+    return pluginDetails(w.root, `${basename(target.path)}-wrapper`);
+  }
+  return null;
 }
 
-// componentsOnly: the target was wrapped in a throwaway plugin, so findings
-// about that plugin's manifest or directory listing are about the wrapper,
-// not the skill, and are dropped.
-function validateFindings(v, label, { componentsOnly = false } = {}) {
-  const findings = [];
-  const add = (sev, file, msg) => findings.push({ id: 'V000', severity: sev, title: `claude plugin validate (${label})`, file, message: msg });
-  if (v.raw) add(v.success ? 'info' : 'error', null, v.raw);
-  const blocks = [componentsOnly ? null : v.manifest, ...(v.contents ?? [])].filter(Boolean);
-  for (const b of blocks) {
-    for (const e of b.errors ?? []) add('error', relative(process.cwd(), b.file ?? ''), `${e.path ? e.path + ': ' : ''}${e.message}`);
-    for (const w of b.warnings ?? []) add('warn', relative(process.cwd(), b.file ?? ''), `${w.path ? w.path + ': ' : ''}${w.message}`);
-  }
-  for (const f of componentsOnly ? [] : v.directory?.findings ?? []) {
-    add(f.severity === 'error' ? 'warn' : 'info', f.file, `[directory listing] ${f.title}: ${f.fix ?? f.message}`);
-  }
-  return findings;
+function detailsLine(d) {
+  const rows = d.focus ? d.components.filter(c => c.name === d.focus) : d.components;
+  const t = x => (/^[~<]/.test(x) ? x : `~${x}`);
+  const parts = rows.map(c => `${c.name} ${t(c.raw[0])} always, ${t(c.raw[1])} when it fires`);
+  return `${d.focus ? '' : `about ${d.alwaysOn} tokens in every session; `}${parts.join('; ')}`;
 }
 
 function creatorValidate(skillDir) {
@@ -280,7 +336,7 @@ function cmdCheck(pos, opts) {
   const surface = opts.target ?? 'claude-code';
   const ran = [];
   let findings = [];
-  let skillDoctor = null;
+  let skillDoctorText = null;
 
   const lint = lintTarget(target, { target: surface });
   for (const r of lint) findings = findings.concat(r.findings);
@@ -300,46 +356,25 @@ function cmdCheck(pos, opts) {
   ran.push(['Eval suite health', suites.map(s => `${s.skill}: ${s.summary ? `${s.summary.shouldFire} fire / ${s.summary.shouldNotFire} near-miss / ${s.summary.heldOut} held-out / ${s.summary.output} output` : 'none'}`).join('; ')]);
 
   const ws = workspaceFor(target, target.kind === 'skill' ? target.path : null);
-  const version = opts.claude === false ? null : hasClaude();
-  if (version) {
-    if (target.pluginRoot && target.kind === 'plugin') {
-      const v = runValidate(target.pluginRoot, target.marketplace ? join(target.pluginRoot, '.claude-plugin', 'plugin.json') : null);
-      findings = findings.concat(validateFindings(v, 'plugin'));
-      if (target.marketplace) findings = findings.concat(validateFindings(runValidate(target.pluginRoot), 'marketplace'));
-      ran.push(['claude plugin validate', v.success === false ? 'failed' : 'passed']);
-    } else if (target.kind === 'skill') {
-      const root = target.pluginRoot ? null : buildWrapper(target, ws, { withDecoys: false }).root;
-      const v = runValidate(target.pluginRoot ?? root, target.pluginRoot ? join(target.pluginRoot, '.claude-plugin', 'plugin.json') : null);
-      findings = findings.concat(validateFindings(v, target.pluginRoot ? 'enclosing plugin' : 'skill', { componentsOnly: !target.pluginRoot }));
-      ran.push(['claude plugin validate', `${v.success === false ? 'failed' : 'passed'} (${target.pluginRoot ? 'enclosing plugin' : 'temporary wrapper plugin'})`]);
-    } else if (target.kind === 'marketplace') {
-      const v = runValidate(target.path);
-      findings = findings.concat(validateFindings(v, 'marketplace'));
-      let failed = v.success === false;
-      for (const pr of target.plugins) {
-        const pv = runValidate(pr, join(pr, '.claude-plugin', 'plugin.json'));
-        findings = findings.concat(validateFindings(pv, basename(pr)));
-        failed ||= pv.success === false;
-      }
-      ran.push(['claude plugin validate', `${failed ? 'failed' : 'passed'} (marketplace and ${target.plugins.length} plugin(s))`]);
-    } else {
-      const v = runValidate(target.path);
-      findings = findings.concat(validateFindings(v, 'skills folder', { componentsOnly: true }));
-      ran.push(['claude plugin validate', `${v.success === false ? 'failed' : 'passed'} (component check of the folder)`]);
-    }
-    // /skill-doctor sees what Claude Code actually loads (including skills synced
-    // from claude.ai, which have no files here to compare), with context cost
-    // and use counts. Non-interactive mode prints it without a model call.
-    const sd = spawnSync('claude', ['-p', '/skill-doctor'], { encoding: 'utf8', timeout: 90000 });
-    if (sd.status === 0 && /skill/i.test(sd.stdout)) {
-      skillDoctor = sd.stdout.trim();
-      const rows = skillDoctor.split('\n').filter(l => /^\s{2}\S+(\s{2,}\S+){3,}/.test(l) && !/^\s{2}skill\s/.test(l));
+  const cc = opts.claude === false ? { found: false, reason: '--no-claude' } : claudeInfo();
+  const version = cc.found ? `Claude Code ${cc.version}` : null;
+  let details = null;
+  if (cc.found) {
+    const v = validateTarget(target, ws, { profile: opts.forDirectory ? 'directory' : null, strict: !!opts.strict });
+    findings = findings.concat(v.findings);
+    ran.push(['claude plugin validate', v.summary]);
+    details = detailsFor(target, ws);
+    if (details) ran.push(['claude plugin details', detailsLine(details)]);
+    skillDoctorText = skillDoctor();
+    if (skillDoctorText) {
+      const rows = skillDoctorText.split('\n').filter(l => /^\s{2}\S+(\s{2,}\S+){3,}/.test(l) && !/^\s{2}skill\s/.test(l));
       ran.push(['/skill-doctor', `${rows.length} skill(s) loaded in your setup; usage table in the report`]);
     } else {
-      ran.push(['/skill-doctor', 'unavailable here (run it in an interactive session; it may live in /plugin, Stats tab)']);
+      ran.push(['/skill-doctor', 'no output from this Claude Code version (run it in a session; some versions show it in /plugin, Stats tab)']);
     }
   } else {
-    ran.push(['claude plugin validate', opts.claude === false ? 'skipped (--no-claude)' : 'skipped (claude CLI not found)']);
+    // Static checks above ran without Claude Code; say once what didn't.
+    ran.push(['Claude Code checks', `not run (${cc.reason}): validation, context cost, /skill-doctor, evals and prompt audits need it`]);
   }
 
   for (const r of lint) {
@@ -354,7 +389,7 @@ function cmdCheck(pos, opts) {
   findings = findings.filter(f => { const k = `${f.id}|${f.skill ?? ''}|${f.file ?? ''}|${f.message}`; if (seen.has(k)) return false; seen.add(k); return true; });
   const c = counts(findings);
   const evalsMissing = suites.some(s => !s.summary || !s.summary.cases);
-  const name = target.plugin?.name ?? (lint[0]?.info.name ?? basename(target.path));
+  const name = target.kind === 'skill' ? (lint[0]?.info.name ?? basename(target.path)) : target.plugin?.name ?? basename(target.path);
   const stamp = timestamp();
   const dir = join(ws, 'skillio', 'checks', stamp);
   mkdirSync(dir, { recursive: true });
@@ -373,17 +408,19 @@ function cmdCheck(pos, opts) {
     '## Findings',
     '',
     findings.length ? renderFindings(findings, { docsBase: docs }) : 'None.',
-    ...(skillDoctor ? ['## Skills loaded in your setup (/skill-doctor)', '', '```text', skillDoctor, '```', ''] : []),
+    ...(details ? ['## Context cost (claude plugin details)', '', 'Always-on is paid in every session, whether or not the skill fires; on-invoke each time it fires.', '', '```text', details.text, '```', ''] : []),
+    ...(skillDoctorText ? ['## Skills loaded in your setup (/skill-doctor)', '', '```text', skillDoctorText, '```', ''] : []),
     '## Not covered by static checks',
     '',
     '- Whether the skill fires on real phrasing and stays quiet on near misses: run the trigger suite (`run-evals --tag trigger --ablation none`).',
     '- Whether output is better than Claude without the skill: run the output cases with the baseline arm.',
+    '- Instructions written for older models, and conflicts with the rest of the setup: `skillio audit` (a model call).',
     '- Judgement calls on content (knowledge Claude already has, freedom vs fragility, examples): the skill-reviewer agent.',
     '- How the skill is used day to day: `/skill-doctor` counts uses over time; run it again after a week of real work.',
     '',
   ].join('\n');
   writeFileSync(join(dir, 'report.md'), md);
-  writeFileSync(join(dir, 'report.json'), JSON.stringify({ name, target: target.path, kind: target.kind, surface, counts: c, ran, suites, collisions: col.results, findings }, null, 2));
+  writeFileSync(join(dir, 'report.json'), JSON.stringify({ name, target: target.path, kind: target.kind, surface, claude: cc.found ? cc.version : null, counts: c, ran, suites, collisions: col.results, contextCost: details ? { alwaysOn: details.alwaysOn, components: details.components } : null, findings }, null, 2));
   if (opts.json) out(JSON.stringify({ report: join(dir, 'report.md'), counts: c, ran, findings }, null, 2));
   else {
     out(`Skillio check: ${name} (${target.kind}, surface ${surface})`);
@@ -429,31 +466,22 @@ function cmdDecoy(pos, opts) {
   out(`Decoy written to ${dir}. run-evals installs it next to the skill under test in every case, the way a rival is installed on a real machine.`);
 }
 
-// Variables a parent Claude Code session passes to anything it spawns. Left
-// in, they let eval runs reach the parent's messaging channel, and in cloud
-// sessions they tell the child it is a remote session, where Claude believes
-// it can't create skills (measured on one case: 1 of 3 runs fired with them,
-// 3 of 3 without). Eval runs should look like a fresh local session, so every
-// session variable goes, except the ones that pick the model provider and
-// carry credentials.
-const KEEP_ENV = /^CLAUDE_CODE_(USE_|OAUTH|API_KEY|PROVIDER|.*AUTH|CLIENT_|.*CERT|.*PROXY|SKIP_BEDROCK|SKIP_VERTEX|SKIP_FOUNDRY|MAX_OUTPUT)/;
-function evalEnv() {
-  const env = { ...process.env };
-  for (const k of Object.keys(env)) {
-    if (/^(CCR_|SESSION_INGRESS|CLAUDE_SESSION_)/.test(k)) delete env[k];
-    else if (k.startsWith('CLAUDE_CODE_') && !KEEP_ENV.test(k)) delete env[k];
-    else if (['CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_EFFORT', 'CLAUDE_AFTER_LAST_COMPACT', 'CLAUDE_AUTO_BACKGROUND_TASKS', 'CLAUDE_CHROME_PERMISSION_MODE'].includes(k)) delete env[k];
-  }
-  env.CLAUDE_CODE_ENABLE_CFC = '0';
-  return env;
-}
-
-const RUN_EVAL_OPTS = new Set(['tag', 'case', 'runs', 'concurrency', 'maxCost', 'maxCostUsd', 'ablation', 'model', 'judgeModel', 'threshold', 'allowTools', 'publish', 'label', 'dryRun', 'scaffold', 'evalsFrom']);
+const RUN_EVAL_OPTS = new Set(['tag', 'case', 'runs', 'concurrency', 'maxCost', 'maxCostUsd', 'ablation', 'model', 'judgeModel', 'threshold', 'allowTools', 'publish', 'label', 'dryRun', 'scaffold', 'evalsFrom', 'trust']);
 
 function cmdRunEvals(pos, opts) {
   if (!pos[0]) fail('run-evals needs a path');
   const unknown = Object.keys(opts).filter(k => !RUN_EVAL_OPTS.has(k));
   if (unknown.length) fail(`run-evals doesn't know ${unknown.map(k => '--' + k.replace(/[A-Z]/g, c => '-' + c.toLowerCase())).join(', ')}; run skillio with no arguments for the options`);
+  const cc = claudeInfo();
+  if (!opts.dryRun && !cc.can.eval) {
+    fail(cc.found ? `evals need Claude Code ${MIN.eval} or later for claude plugin eval (found ${cc.version}); update with \`claude update\`` : `evals need Claude Code (${cc.reason}). The static checks (skillio check) work without it.`);
+  }
+  // plugin eval loads the plugin and runs its hooks, scripts and eval suite as
+  // the user. Its own rule: trust is the user's call, never the agent's, so
+  // run-evals passes --trust-plugin only when told to.
+  if (!opts.dryRun && !opts.trust) {
+    fail('evals load this plugin and run its hooks, scripts and eval cases on this machine as you. Ask the user whether they trust it; on an explicit yes, add --trust.');
+  }
   const target = detectTarget(pos[0]);
   if (!target.pluginRoot && target.kind !== 'skill') fail('run-evals needs a plugin or a skill');
   const ws = workspaceFor(target, target.kind === 'skill' ? target.path : null);
@@ -472,7 +500,8 @@ function cmdRunEvals(pos, opts) {
     // One skill inside a plugin: don't pay for the sibling skills' cases.
     tags.push(`skill:${skillName}`);
   }
-  const args = ['plugin', 'eval', pluginDirShown, '--output-dir', outDir, '--report', join(outDir, 'report.html'), '--trust-plugin'];
+  const args = ['plugin', 'eval', pluginDirShown, '--output-dir', outDir, '--report', join(outDir, 'report.html')];
+  if (opts.trust) args.push('--trust-plugin');
   if (!opts.publish) args.push('--no-publish');
   for (const t of tags) args.push('--tag', t);
   if (opts.case) args.push('--case', opts.case);
@@ -481,7 +510,10 @@ function cmdRunEvals(pos, opts) {
   args.push('--max-cost-usd', String(opts.maxCost ?? opts.maxCostUsd ?? 10));
   if (opts.ablation) args.push('--ablation', opts.ablation);
   if (opts.model) args.push('--model', opts.model);
-  if (opts.judgeModel) args.push('--judge-model', opts.judgeModel);
+  // llm graders: plugin eval's default judge is haiku, and its own authoring
+  // guide says small judges miss nuance. Only llm graders use it, so trigger
+  // suites cost the same.
+  args.push('--judge-model', opts.judgeModel ?? 'sonnet');
   if (opts.threshold) args.push('--threshold', String(opts.threshold));
   if (opts.scaffold) args.push('--scaffold');
   if (opts.allowTools?.length) args.push('--allow-tools', ...opts.allowTools);
@@ -502,15 +534,16 @@ function cmdRunEvals(pos, opts) {
   if (decoys.length) out(`Decoys installed beside the skill under test: ${decoys.join(', ')}`);
   out(`Running: ${command}`);
   out(`Results: ${outDir}`);
-  const child = spawn('claude', args, { env: evalEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn('claude', args, { env: cleanEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
   const log = join(outDir, 'run.log');
   child.stdout.on('data', d => { process.stdout.write(d); appendFileSync(log, d); });
   child.stderr.on('data', d => { process.stderr.write(d); appendFileSync(log, d); });
-  child.on('error', e => fail(`could not start claude: ${e.message}. Is Claude Code 2.1.269 or later installed?`));
+  child.on('error', e => fail(`could not start claude: ${e.message}. Is Claude Code ${MIN.eval} or later installed?`));
   child.on('close', code => {
     const agg = join(outDir, 'aggregate-result.json');
     if (existsSync(agg)) {
-      const summary = summarise(agg, target, evalsFrom);
+      const warnings = runWarnings(agg, log, { ablation: opts.ablation });
+      const summary = (warnings.length ? ['# Read this first', '', ...warnings.map(w => `- ${w}`), '', ''].join('\n') : '') + summarise(agg, target, evalsFrom);
       writeFileSync(join(outDir, 'summary.md'), summary);
       out('\n' + summary);
     } else {
@@ -519,6 +552,33 @@ function cmdRunEvals(pos, opts) {
     if (code === 2) out('Exit 2: a partial run (cost ceiling hit or credential rejected). Don\'t compare its numbers with a full run.');
     process.exit(code ?? 1);
   });
+}
+
+// Problems that make a run's numbers meaningless, from plugin eval's own
+// result file and log. Its authoring guide names them: a plugin entry with one
+// of these problem codes means the with-plugin arm ran without the plugin, and
+// "cannot pass with the granted tools" means a file grader can never pass.
+const LOAD_PROBLEMS = new Set(['manifest_invalid', 'disabled_by_default', 'will_not_load']);
+
+function runWarnings(aggPath, logPath, { ablation } = {}) {
+  const warnings = [];
+  let raw = null;
+  try { raw = JSON.parse(readFileSync(aggPath, 'utf8')); } catch { return warnings; }
+  const plugins = raw.suite?.plugins ?? [];
+  if (!plugins.length) warnings.push('No plugin was loaded for this run (suite.plugins is empty): the with-plugin arm ran without it, so these numbers say nothing about the skill. Check the path and the manifest.');
+  for (const p of plugins) {
+    const probs = [p.problem, ...(p.problems ?? [])].filter(Boolean).map(x => (typeof x === 'string' ? x : x.code ?? x.kind ?? JSON.stringify(x)));
+    for (const code of probs) {
+      if (LOAD_PROBLEMS.has(code)) warnings.push(`Plugin ${p.name} reported ${code}: the with-plugin arm ran without it. Fix that before reading any score.`);
+    }
+  }
+  if (logPath && existsSync(logPath)) {
+    for (const line of readFileSync(logPath, 'utf8').split('\n')) {
+      if (/cannot pass with the granted tools/.test(line)) warnings.push(`${line.replace(/^[^\w⚠]*/, '').trim()} (grant the tool in the case's allowed_tools or with --allow-tools, then rerun that case)`);
+    }
+  }
+  if (raw.partial) warnings.push(`Partial run (${raw.partialReason ?? 'cost ceiling or credential'}): don't compare these numbers with a full run.`);
+  return [...new Set(warnings)];
 }
 
 function summarise(aggPath, target, evalsFrom = null) {
@@ -565,7 +625,126 @@ function summarise(aggPath, target, evalsFrom = null) {
 function cmdResults(pos, opts) {
   if (!pos[0]) fail('results <aggregate-result.json> [--path <plugin-or-skill>]');
   const target = detectTarget(opts.path ?? process.cwd());
-  out(summarise(resolve(pos[0]), target));
+  const agg = resolve(pos[0]);
+  const warnings = runWarnings(agg, join(dirname(agg), 'run.log'));
+  if (warnings.length) out(['# Read this first', '', ...warnings.map(w => `- ${w}`), ''].join('\n'));
+  out(summarise(agg, target));
+}
+
+// --- Claude Code tools: what's here, prompt audits, eval authoring ------------------------
+
+function cmdTools(pos, opts) {
+  const cc = claudeInfo();
+  const sc = skillCreator(PLUGIN_ROOT, { lookupAvailable: true });
+  const py = spawnSync('python3', ['-c', 'import yaml'], { encoding: 'utf8' });
+  const python = py.error ? 'missing' : py.status === 0 ? 'ok' : 'no-pyyaml';
+  const zip = !spawnSync('zip', ['-v'], { encoding: 'utf8' }).error;
+  const res = { claude: { found: cc.found, version: cc.version, reason: cc.reason ?? null }, can: cc.can, minVersions: MIN, skillCreator: sc, python, zip };
+  if (opts.json) return out(JSON.stringify(res, null, 2));
+  const yes = (b, why) => (b ? 'yes' : `no${why ? ` (${why})` : ''}`);
+  if (cc.found) {
+    out(`Claude Code ${cc.version}`);
+    out(`  validation            claude plugin validate               ${yes(cc.can.validate)}`);
+    out(`  context cost          claude plugin details                ${yes(cc.can.details)}`);
+    out(`  evals                 claude plugin eval, eval init        ${yes(cc.can.eval, `needs ${MIN.eval}`)}`);
+    out(`  prompt audits         /claude-api and /doctor prompt-audit ${yes(cc.can.promptAudit, `needs ${MIN.promptAudit}`)}`);
+    out(`  usage                 /skill-doctor                        ${yes(cc.can.skillDoctor)}`);
+  } else {
+    out(`Claude Code: not available (${cc.reason}).`);
+    out('  Works without it: lint, collisions, inventory, eval-suite health, trigger-case generation, snapshots, packaging, skill-creator and its scripts.');
+    out('  Needs it: claude plugin validate and details, evals, prompt audits, /skill-doctor.');
+  }
+  out(sc.source === 'plugin'
+    ? `skill-creator: installed plugin ${sc.id} at ${sc.path}`
+    : `skill-creator: Skillio's pinned copy at ${sc.path}${sc.installId ? ` (install the plugin to get updates: /plugin install ${sc.installId})` : ''}`);
+  out(`python3 with PyYAML: ${python === 'ok' ? 'yes' : python === 'missing' ? 'no python3 (skill-creator\'s scripts and validator need it)' : 'no PyYAML (pip install pyyaml)'}`);
+  out(`zip: ${yes(zip, 'packaging for the Claude app needs it')}`);
+}
+
+// The project a path belongs to, for /doctor prompt-audit: the nearest folder
+// up with a .git, a .claude folder or a CLAUDE.md; else the path itself.
+function projectRoot(p) {
+  let d = existsSync(p) && !p.endsWith('.md') ? resolve(p) : dirname(resolve(p));
+  for (let cur = d; ; ) {
+    if (['.git', '.claude', 'CLAUDE.md', 'AGENTS.md'].some(n => existsSync(join(cur, n))) && basename(cur) !== '.claude') return cur;
+    const up = dirname(cur);
+    if (up === cur) return d;
+    cur = up;
+  }
+}
+
+function cmdAudit(pos, opts) {
+  const scope = opts.scope ?? (opts.setup ? 'both' : 'skill');
+  if (!['skill', 'setup', 'both'].includes(scope)) fail('--scope is skill, setup or both');
+  const p = resolve(pos[0] ?? '.');
+  const target = detectTarget(p);
+  const cc = claudeInfo();
+  if (!cc.can.promptAudit) {
+    out(`Prompt audits not run: ${cc.found ? `they need Claude Code ${MIN.promptAudit} or later (found ${cc.version})` : cc.reason}.`);
+    return;
+  }
+  const ws = workspaceFor(target, target.kind === 'skill' ? target.path : null);
+  const dir = join(ws, 'skillio', 'audits', timestamp());
+  mkdirSync(dir, { recursive: true });
+  const root = gitRoot(target.path) ?? dirname(target.path);
+  const jobs = [];
+  // One call for the whole target: a skill folder, or a plugin (its skills,
+  // agents and commands), or a folder of skills.
+  if (scope !== 'setup') jobs.push({ scope: 'skill', cwd: root, path: relative(root, target.path) || '.', file: 'prompt-audit.md', label: `/claude-api prompt-audit ${relative(root, target.path) || '.'}` });
+  if (scope !== 'skill') jobs.push({ scope: 'setup', cwd: projectRoot(target.path), file: 'setup-audit.md', label: '/doctor prompt-audit' });
+  let total = 0;
+  for (const j of jobs) {
+    out(`Running ${j.label} in ${j.cwd} (a model call on your account)...`);
+    const r = promptAudit({ scope: j.scope, path: j.path, cwd: j.cwd, model: opts.model });
+    if (r.skipped || r.error) { out(`  ${r.skipped ? 'skipped' : 'failed'}: ${r.skipped ?? r.error}`); continue; }
+    total += r.costUsd ?? 0;
+    const file = join(dir, j.file);
+    writeFileSync(file, `<!-- ${j.label}, run by skillio audit in ${j.cwd}, ${new Date().toISOString().slice(0, 16)}, $${(r.costUsd ?? 0).toFixed(2)} -->\n\n${r.text}\n`);
+    out(`  saved to ${file} ($${(r.costUsd ?? 0).toFixed(2)})\n`);
+    out(r.text);
+    out('');
+  }
+  out(`Audit cost: $${total.toFixed(2)}. Proposed diffs are suggestions; nothing was changed.`);
+}
+
+function cmdEvalInit(pos, opts) {
+  const target = detectTarget(pos[0] ?? '.');
+  if (!target.pluginRoot && target.kind !== 'skill') fail('eval-init takes a plugin or a skill folder');
+  const skillName = target.kind === 'skill' ? (lintSkill(target.path).info.name ?? basename(target.path)) : null;
+  const cwd = target.kind === 'skill' && !target.pluginRoot ? target.path : target.pluginRoot;
+  const evalArgs = target.kind === 'skill' && !target.pluginRoot ? ['--eval-dir', 'evals'] : [];
+  const cli = `node "${join(PLUGIN_ROOT, 'scripts', 'skillio.mjs')}"`;
+  const notes = [
+    '',
+    '## Skillio notes for this interview',
+    '',
+    '- Use it for output cases: what the skill produces. Triggering is covered by Skillio\'s trigger suite (`trigger-cases`), with more near misses and a held-out split.',
+    `- Add \`tags: [output${skillName ? `, skill:${skillName}` : ', skill:<skill-name>'}]\` to the frontmatter of every prompt.md you write, so \`run-evals --tag output\` and Skillio's summaries find the cases.`,
+    `- Pilot with \`${cli} run-evals ${target.kind === 'skill' ? target.path : target.pluginRoot} --case <name> --runs 1 --trust\` (add \`--allow-tools ...\` when a case needs them) instead of \`claude plugin eval .\`: it also works for a skill outside a plugin, keeps the report local and gives the runs a clean environment. Ask the trust question first, exactly as the interview says.`,
+    '- run-evals uses `--judge-model sonnet` unless you pass another, as the interview recommends.',
+  ].join('\n');
+  const cc = claudeInfo();
+  if (!cc.can.eval) {
+    out(`claude plugin eval init isn't available (${cc.found ? `needs Claude Code ${MIN.eval}` : cc.reason}). Write output cases by hand from ${join(PLUGIN_ROOT, 'skills', 'building-skills', 'references', 'eval-suite.md')}, section "Output cases and graders".`);
+    return;
+  }
+  if (opts.bare) {
+    const r = spawnSync('claude', ['plugin', 'eval', 'init', '--bare', String(opts.bare), ...evalArgs], { cwd, encoding: 'utf8', env: cleanEnv() });
+    out((r.stdout + r.stderr).trim());
+    process.exit(r.status ?? 1);
+  }
+  if (process.stdin.isTTY && process.stdout.isTTY && !process.env.CLAUDECODE) {
+    // A person at a terminal: the real interview, run by Claude Code.
+    const r = spawnSync('claude', ['plugin', 'eval', 'init', ...evalArgs], { cwd, stdio: 'inherit', env: cleanEnv() });
+    out(notes);
+    process.exit(r.status ?? 1);
+  }
+  // Inside a session there is no terminal for the interview, so Claude Code
+  // prints it for the session's Claude to conduct. The session variables stay
+  // so it can tell.
+  const r = spawnSync('claude', ['plugin', 'eval', 'init', ...evalArgs], { cwd, encoding: 'utf8', env: { ...process.env, CLAUDECODE: process.env.CLAUDECODE ?? '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  out((r.stdout + r.stderr).trim());
+  out(notes);
 }
 
 // --- working files ----------------------------------------------------------------------
@@ -631,8 +810,8 @@ const [cmd, ...rest] = process.argv.slice(2);
 const { pos, opts } = parseArgs(rest);
 if (opts.claude === undefined && rest.includes('--no-claude')) opts.claude = false;
 const commands = {
-  lint: cmdLint, collisions: cmdCollisions, inventory: cmdInventory, check: cmdCheck, evals: cmdEvals,
-  'trigger-cases': cmdTriggerCases, decoy: cmdDecoy, 'run-evals': cmdRunEvals, results: cmdResults,
+  tools: cmdTools, lint: cmdLint, collisions: cmdCollisions, inventory: cmdInventory, check: cmdCheck, audit: cmdAudit, evals: cmdEvals,
+  'trigger-cases': cmdTriggerCases, decoy: cmdDecoy, 'eval-init': cmdEvalInit, 'run-evals': cmdRunEvals, results: cmdResults,
   workspace: cmdWorkspace, snapshot: cmdSnapshot, observe: cmdObserve, package: cmdPackage,
 };
 if (!cmd || cmd === 'help' || cmd === '--help' || !commands[cmd]) {

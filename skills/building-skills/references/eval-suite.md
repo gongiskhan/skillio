@@ -11,6 +11,7 @@
 - Targets
 - Cost and time
 - Isolation and trust
+- Gating CI
 
 ## How plugin eval runs a case
 
@@ -76,7 +77,9 @@ Runs start in an empty folder. A prompt like "check my release-notes skill" then
 
 ## Output cases and graders
 
-Output cases check what the skill produced. Tag them `output`, keep the baseline arm on, and grade with the cheapest grader that can decide:
+Output cases check what the skill produced. The quickest way to write good ones is `skillio eval-init <path>`, which runs Claude Code's own authoring interview (`claude plugin eval init`): it asks what a good and a bad result look like, proposes graders, writes the cases and pilots them with you until the graders score the way you would. The rules below are the same ones; use them to write cases by hand (without Claude Code) or to review what the interview wrote.
+
+Tag output cases `output` and `skill:<name>`, keep the baseline arm on, and grade with the cheapest grader that can decide:
 
 | Question | Grader |
 | --- | --- |
@@ -86,7 +89,9 @@ Output cases check what the skill produced. Tag them `output`, keep the baseline
 | Did it validate before writing? | `tool_order` with `before` and `after` |
 | Is the summary accurate, the tone right? | `llm`, one dimension per grader, PASS if / FAIL if |
 
-An `llm` judge passes on two of three votes. Judges drift on long text and refuse binary files such as .pptx or PDF, so grade files with code and keep judges for short, readable outputs. Point a file grader at the file's contents (`target: {source: file, path: ...}`), not at `files`, which is only the list of created paths.
+An `llm` judge passes on two of three votes. Judges drift on long text and refuse binary files such as .pptx or PDF, so grade files with code and keep judges for short, readable outputs (an image file is shown to the judge as an image, which is how to grade a rendered slide or chart). Point a file grader at the file's contents (`target: {source: file, path: ...}`), not at `files`, which is only the list of created paths. `skillio run-evals` passes `--judge-model sonnet` unless you choose another: plugin eval's default judge is Haiku, and its own authoring guide says small judges miss nuance. The judge should not be the model under test, which tends to prefer its own writing.
+
+Tools follow graders. A grader that needs a file created only passes if the case can write files: put `Write` (and `Bash` if a command writes it) in the case's `allowed_tools`, or grant it at run time with `--allow-tools`. Size `timeout_seconds` and `max_turns` to the task: about 120 s and 5 turns for a one-shot answer, 600 to 900 s and 25 to 40 turns for work that reads a repo and writes a report. A missing tool or a short budget scores 0 in both arms and reads as "the skill did nothing"; plugin eval warns "cannot pass with the granted tools", and `skillio run-evals` repeats that warning at the top of its summary.
 
 Runs start in an empty folder. If the task needs input files, put them in a `case.yaml` with `context.add_dirs` (read-only fixtures) or a `context.scaffold_script` (runs only with `--scaffold`, as you, so only for suites you wrote). Tools that write (`Write`, `Edit`, `Bash`) need `--allow-tools`; without them no file gets created in either arm and every file grader fails.
 
@@ -98,6 +103,7 @@ A complete output case, `evals/output-my-skill/q3-board-summary/`:
 description: "Board summary from the Q3 export"
 tags: [output, skill:my-skill]
 max_turns: 25
+timeout_seconds: 600
 allowed_tools: [Read, Glob, Grep, Skill, Write, Bash]
 ---
 
@@ -157,4 +163,29 @@ Each run is a full Claude session on the user's account. Skillio's own 60 trigge
 
 ## Isolation and trust
 
-`skillio run-evals` unsets the variables a parent session leaks into children (its messaging channel, and in cloud sessions the markers that make a child behave as a remote session, where Claude refuses to create skills) and sets `CLAUDE_CODE_ENABLE_CFC=0`, so eval runs look like a fresh local session and can't drive the user's Chrome or post into the conversation. If a run's transcripts show Claude saying it can't do something a normal session can, suspect the environment before the skill. It passes `--trust-plugin`, which plugin eval requires when there is no terminal to answer its trust prompt. That is fine for skills the user wrote; for third-party plugins, run evals only when the user says so, because a plugin's hooks and scripts run as the user outside the eval sandbox.
+`skillio run-evals` unsets the variables a parent session leaks into children (its messaging channel, and in cloud sessions the markers that make a child behave as a remote session, where Claude refuses to create skills) and sets `CLAUDE_CODE_ENABLE_CFC=0`, so eval runs look like a fresh local session and can't drive the user's Chrome or post into the conversation. If a run's transcripts show Claude saying it can't do something a normal session can, suspect the environment before the skill. Trust is the user's decision. plugin eval asks before it first runs a plugin, and a run started from a session has no terminal to answer, so it needs `--trust-plugin`; Claude Code's own rule is never to add that on an agent's judgement. `skillio run-evals` passes it only with `--trust`, which the skills add after the user says yes. That holds for skills the user wrote too: the eval runs every hook and script in the plugin, as them, outside the sandbox that confines the model's shell commands.
+
+## Gating CI
+
+`claude plugin validate` and `claude plugin eval` both exit non-zero on failure, so a repository can refuse changes that break loading or triggering. Validation is free; evals cost money on every run, so run them only when skills change. A GitHub Actions job:
+
+```yaml
+name: skills
+on:
+  pull_request:
+    paths: ["skills/**", "evals/**", ".claude-plugin/**"]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm install -g @anthropic-ai/claude-code
+      - run: claude plugin validate . --strict
+      - run: claude plugin eval . --tag tuning --ablation none --threshold 0.9 --trust-plugin --no-publish --max-cost-usd 10
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+Here `--trust-plugin` is right: the repository's own CI is trusting its own code. `--threshold` fails the job when any case scores below it. Keep held-out cases out of CI (the `tuning` tag): a held-out set checked on every pull request becomes a tuning set.

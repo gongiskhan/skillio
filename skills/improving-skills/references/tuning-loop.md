@@ -1,6 +1,6 @@
 # Tuning loops
 
-An automated loop proposes a change, runs the eval, keeps the change if the score rises, and repeats. Karpathy's "autoresearch" pattern (March 2026) made this popular for skills; Anthropic's `/claude-api hillclimb` is the governed version of the same idea. Loops find real gains and invent fake ones with equal enthusiasm. These rules keep the fake ones out.
+An automated loop proposes a change, runs the eval, keeps the change if the score rises, and repeats. Anthropic's `/claude-api hillclimb` is a governed version of the idea. Loops find real gains and invent fake ones with equal enthusiasm. These rules keep the fake ones out.
 
 ## Contents
 
@@ -36,6 +36,6 @@ An automated loop proposes a change, runs the eval, keeps the change if the scor
 | Job | Tool | Caveat |
 | --- | --- | --- |
 | Candidate descriptions from failed trigger queries | skill-creator `run_loop.py` | Tests via slash commands, not skill loading; confirm in plugin eval |
-| Measuring triggering for real | `skillio run-evals --tag trigger --ablation none` | Claude Code runtime; the Claude app is close but not identical |
+| Measuring triggering for real | `skillio run-evals <path> --trust --tag trigger --ablation none` | Claude Code runtime; the Claude app is close but not identical |
 | Climbing an API-based eval | `/claude-api hillclimb` (after `/claude-api build-eval`) | For skills run through the API with a scripted harness |
 | Reflective prompt optimisation (GEPA, DSPy) | Personal lab only | A SKILL.md is not a DSPy program; borrow the method (reflect on failures, keep the best on held-out cases), not the framework |

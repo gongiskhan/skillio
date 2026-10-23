@@ -171,14 +171,21 @@ A skill meant for the app should pass Skillio's lint with `--target claude-ai`, 
 
 ## 10. The tool map
 
+Claude Code ships most of the tools a skill needs. Skillio runs them for you and fills the gaps between them.
+
 | Tool | What it does | Where Skillio uses it |
 | --- | --- | --- |
-| skill-creator (Anthropic) | Interviews, drafts, runs with and without the skill, grades, shows a review viewer, benchmarks, packages | building-skills step 1; vendored |
-| `claude plugin validate` | Claude Code's loader checks, plus listing checks for Anthropic's plugin directory | checking-skills, every check |
-| `claude plugin eval` | Runs cases with and without the plugin in isolated sessions, six grader types, HTML report, CI exit codes | The suite of record for triggering and output |
-| `claude plugin eval init` | Interviews you and writes a starter suite | An alternative to `skillio trigger-cases` |
-| `/skill-doctor` | Shows unused skills and their context cost in your real setup | Suggested by checking-skills (interactive only) |
-| `/claude-api build-eval`, `hillclimb` | Builds an eval for API-based apps and climbs it with train/test splits and auto-revert | Suggested by improving-skills for API skills |
+| skill-creator (Anthropic plugin) | Interviews, drafts, runs each test case in a clean subagent with and without the skill, grades assertions with evidence, blind A/B between versions, review viewer, packaging | building-skills step 1. The installed plugin when there is one (`/plugin install skill-creator@...`), else Skillio's pinned copy |
+| `claude plugin validate` | Claude Code's loader checks on a plugin, a marketplace, or the skills, agents and commands in any folder (`claude plugin validate .claude/skills`): frontmatter that won't parse, wrong field types, manifest errors. `--strict` fails on warnings, `--json` for CI, `--profile directory` for Anthropic's plugin directory | Every check, and the edit hook after each SKILL.md or manifest edit |
+| `/plugin validate` | The same report inside a session | Mentioned to you; Skillio runs the CLI |
+| `claude plugin details` | Projected context cost: always-on (the listing) and on-invoke, per component | Every check, in the report |
+| `claude plugin eval` | Runs cases several times in isolated sessions, with and without the plugin, scores both, exits non-zero below a threshold (CI) | The suite of record for triggering and output (`skillio run-evals`) |
+| `claude plugin eval init` | An interview that proposes cases and graders, writes them, and pilots them with you until the graders score the way you would | Output cases (`skillio eval-init`); Skillio's trigger-case generator covers triggering |
+| `claude plugin init <name> --with skills` | Scaffolds a personal plugin in `~/.claude/skills/<name>/` that loads next session | building-skills step 0 |
+| `/claude-api prompt-audit <path>` | Finds instructions written for older models in a skill, agent or prompt and proposes a diff | `skillio audit`, in checking and improving |
+| `/doctor prompt-audit` | The same for the whole setup Claude Code loads: CLAUDE.md files, rules, skills, including conflicts between them | `skillio audit --scope both` for skills installed in a project or `~/.claude/skills` |
+| `/skill-doctor` | Every skill loaded in your real setup, its context cost and use counts | Every check |
+| `/claude-api build-eval`, `hillclimb` | Builds an eval for an app that calls the API, then improves the app against it with train/test splits and auto-revert | Suggested for skills that run inside such an app |
 | Skillio lint | Spec limits, description quality, references, case mismatches, secrets, eval overfitting | Every check and every edit (hook) |
 | writing-skills (obra/superpowers) | Test-driven skill writing, pressure tests, matching the form of guidance to the failure | improving-skills; vendored |
 | skill-judge (softaworks) | A 120-point design rubric | The reviewer agent's rubric borrows from it; vendored |
@@ -186,9 +193,15 @@ A skill meant for the app should pass Skillio's lint with `--target claude-ai`, 
 | Agent Skills spec and guides | The open standard and its guides on evaluating and optimising descriptions | Reference; vendored |
 | skills-ref (agentskills) | The standard's reference validator; its README says demonstration only | Not used; Skillio's lint covers the same rules |
 
+`skillio tools` shows which of these the current machine can run. Where Claude Code isn't installed (another editor, a CI box without it), Skillio runs what doesn't need it (its linter, overlap and suite checks, skill-creator and its validator, packaging) and the report lists what it couldn't cover.
+
+**Why run several validators.** They disagree, and each disagreement is information. Skillio's test fixture `bad-skill` has the name `Bad_Skill_for_claude` and a description with an unquoted colon. `claude plugin validate` passes it, because Claude Code's loader is lenient: it reads the colon fine and doesn't check name format. skill-creator's validator rejects it, because the Claude app's uploader parses YAML strictly. Skillio's linter flags the name (it breaks the open standard and uses a reserved word) and warns about the colon. A skill only for Claude Code can live with the lenient verdict; one headed for the app has to pass the strict one.
+
+**Why a prompt audit, when there is already a reviewer.** The reviewer scores the skill against an authoring rubric. The audit asks a narrower question: which lines were written for a model that is no longer the one reading them? Pressure language, "think step by step" and workarounds for retired models make current models rigid or even refuse. The two overlap a little and catch different things; the first audit of Skillio itself found five stale commands and two history paragraphs the rubric would not have flagged.
+
 Not worth your time, from the October 2026 research: third-party eval wrappers that `claude plugin eval` now replaces, 1-to-5 Likert judges (use binary checks), hosted eval platforms for work data you can't send out, and community "autoresearch for skills" loops without held-out sets or frozen graders.
 
-**In simple terms.** Anthropic's own tools (skill-creator, validate, plugin eval, skill-doctor) do the heavy lifting. Skillio connects them, adds the checks they don't do, and keeps the best community thinking on hand as reading material.
+**In simple terms.** Claude Code's own tools (skill-creator, validate, details, plugin eval and its interview, the prompt audits, skill-doctor) do the heavy lifting, and they check a skill the way Claude Code will load it. Skillio runs all of them in the right order, adds the checks they don't do, and still works, with less, where Claude Code isn't installed.
 
 ## 11. Lessons from measured skills
 

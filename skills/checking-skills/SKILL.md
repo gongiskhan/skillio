@@ -7,7 +7,9 @@ description: Checks whether a skill or a plugin's skills are good and ready to s
 
 A skill can look fine and still never fire, fire on the wrong requests, or make Claude worse than it is without it. No single tool sees all of that, so this runs all of them and puts the results in one report. Static checks are free and run first; evals cost model calls and run second; a separate reviewer reads the skill last, without having watched it being written.
 
-`skillio` below means `node "${CLAUDE_PLUGIN_ROOT}/scripts/skillio.mjs"`.
+`skillio` below means `node "${CLAUDE_PLUGIN_ROOT}/scripts/skillio.mjs"` (`${CLAUDE_PLUGIN_ROOT}` is Skillio's folder, two levels above this file, if your tool doesn't fill it in).
+
+Run `skillio tools` first. It says which Claude Code tools this machine has: `claude plugin validate` and `details`, `claude plugin eval`, the prompt audits, `/skill-doctor`. Run every one that exists; they see the skill the way Claude Code loads it. Without Claude Code, run the rest without discussing it and list what wasn't covered in the report.
 
 ## 1. Identify the target
 
@@ -24,41 +26,49 @@ This runs, in one pass:
 - **Skillio's linter**: the Agent Skills spec limits, description quality, body size, broken and nested references, file-name case mismatches, secrets and junk in the folder.
 - **Description overlap**: compares the description with every skill installed for this user and with its siblings in the same plugin. Overlap is the usual cause of "it fired the wrong skill".
 - **Eval suite health**: whether cases exist, whether there are near misses and held-out cases, whether the description copies a test prompt.
-- **`claude plugin validate`**: Claude Code's own loader checks, plus the plugin directory's listing checks. A bare skill is wrapped in a temporary plugin in the workspace so it can be validated.
+- **`claude plugin validate`**: Claude Code's own loader checks, including frontmatter that won't parse (the skill would load with no metadata), plus the plugin directory's listing checks as notes. A bare skill is validated in place through its folder, keeping only its own findings. Add `--strict` to fail on validator warnings, `--for-directory` for a plugin headed to Anthropic's plugin directory.
+- **`claude plugin details`**: Claude Code's estimate of the context the skill costs, always (its listing line, paid in every session) and when it fires.
 - **skill-creator's `quick_validate.py`**: the Claude app's upload rules.
-- **`/skill-doctor`**: every skill Claude Code actually loads for this user, with context cost and use counts, in the report when the CLI can run it.
+- **`/skill-doctor`**: every skill Claude Code actually loads for this user, with context cost and use counts.
 
 It writes `report.md` and `report.json` to the workspace and prints the path. Each finding names a rule; its full reason is under the same id in `${CLAUDE_PLUGIN_ROOT}/docs/principles.md`.
 
-## 3. Evals
+## 3. Prompt audit
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/skillio.mjs" audit <path>
+```
+
+This runs Claude Code's `/claude-api prompt-audit` on the skill or plugin in a separate, read-only session: instructions written for older models (pressure language, "think step by step", workarounds for retired models, hard word caps), with a proposed diff it does not apply. Add `--scope both` when the skill lives in a project's `.claude/skills` or in `~/.claude/skills`: it also runs `/doctor prompt-audit` over the whole setup Claude Code loads there (CLAUDE.md files, rules, other skills), which is where conflicting instructions show up. Each audit is a model call on the user's account: measured at about $0.65 for one small skill and $1.75 for a three-skill plugin on the default model; `--model sonnet` costs less. Mention the cost in the line where you start it. Start it with Bash `run_in_background` and go on with sections 4 and 5 while it runs.
+
+## 4. Evals
 
 Run the suite if one exists. Static checks can't tell you whether Claude picks the skill on real wording, and only a baseline tells you whether the skill helps at all.
 
-1. **Trust first.** Evals run the plugin's hooks and scripts as the user; plugin eval's own docs say its isolation is not a boundary against the plugin's own code. If the skill is third-party and the user hasn't reviewed it, skip all of section 3 and say why.
-2. **Say the cost.** State in one line how many cases and runs it is and the cap (`--max-cost`, $10 by default per call).
-3. **Triggering:** `skillio run-evals <path> --tag trigger --ablation none --scaffold`. For one skill inside a plugin, pass the skill's folder; run-evals then keeps to that skill's cases (`skill:<name>`) instead of paying for its siblings'.
-4. **Output:** `skillio run-evals <path> --tag output --allow-tools Write Edit Bash` (baseline arm on).
-5. Start long suites with Bash `run_in_background` and start section 4 while they run.
+1. **Trust and cost, in one question.** Evals load the plugin and run its hooks, scripts and cases on the user's machine as them; plugin eval's own docs say its sandbox is not a boundary against the plugin's own code. Ask once: do they trust this plugin for that, and is N cases × 3 runs, capped at $10 (`--max-cost`), fine? Only on an explicit yes, pass `--trust`; run-evals refuses to start without it. With no answer, skip this section and say so in the report.
+2. **Triggering:** `skillio run-evals <path> --trust --tag trigger --ablation none --scaffold`. For one skill inside a plugin, pass the skill's folder; run-evals then keeps to that skill's cases (`skill:<name>`) instead of paying for its siblings'.
+3. **Output:** `skillio run-evals <path> --trust --tag output --allow-tools Write Edit Bash` (baseline arm on; judges default to Sonnet).
+4. Start long suites with Bash `run_in_background` and start section 5 while they run. If the summary opens with "Read this first", the plugin didn't load or a grader can't pass with the tools granted; report that instead of the numbers.
 
-If there is no suite, the skill is untested, and a check should still produce a number. Build a starter trigger set without touching the skill: write 10 should-fire prompts, 10 near misses and 4 held-out prompts as building-skills' eval guide (`${CLAUDE_PLUGIN_ROOT}/skills/building-skills/references/eval-suite.md`) describes, convert them into the workspace with `skillio trigger-cases <path> --skill <name> --from <set.json> --into <workspace>/skillio/starter-evals`, and run them with `skillio run-evals <path> --evals-from <workspace>/skillio/starter-evals --ablation none --scaffold`. The cases stay in the workspace; offer to move them into the skill's suite.
+If there is no suite, the skill is untested, and a check should still produce a number. Build a starter trigger set without touching the skill: write 10 should-fire prompts, 10 near misses and 4 held-out prompts as building-skills' eval guide (`${CLAUDE_PLUGIN_ROOT}/skills/building-skills/references/eval-suite.md`) describes, convert them into the workspace with `skillio trigger-cases <path> --skill <name> --from <set.json> --into <workspace>/skillio/starter-evals`, and run them with `skillio run-evals <path> --trust --evals-from <workspace>/skillio/starter-evals --ablation none --scaffold`. The cases stay in the workspace; offer to move them into the skill's suite, and `skillio eval-init <path>` for output cases.
 
 Read `references/reading-results.md` before drawing conclusions from the numbers; small suites are noisy and a delta near zero means several different things.
 
-## 4. Independent review
+## 5. Independent review
 
 Start the `skill-reviewer` agent from this plugin with the skill path, the surface, the path of the static report and the rubric path, `${CLAUDE_PLUGIN_ROOT}/skills/checking-skills/references/review-rubric.md`. It reads every file in the skill with the rubric in `references/review-rubric.md` and returns scored findings with evidence. It judges what code can't: whether the body teaches Claude anything it doesn't know, whether freedom matches fragility, whether instructions say why, whether failure cases are handled. For a plugin, start one reviewer per skill, in parallel.
 
-## 5. What you can't run
+## 6. What you can't run
 
-The check includes `/skill-doctor` when the CLI can run it non-interactively; its use counts mean more after a week of real work, so suggest re-running it then. Some versions moved it into the `/plugin` Stats tab; if the report says it was unavailable, point the user there.
+The check includes `/skill-doctor`; its use counts mean more after a week of real work, so suggest re-running it then. If the report says it gave no output, ask the user to run `/skill-doctor` in an interactive session. The user can also see the validator's report inside a session with `/plugin validate <path>`.
 
-## 6. Report
+## 7. Report
 
 Lead with the verdict in one sentence: ready, ready after small fixes, or not ready. Then:
 
 - What ran and what each found, one line per check, including what was skipped and why.
-- The issues that matter, most serious first. For each: what is wrong, where (file and line), why it matters in one or two sentences, the plain-words version, and the fix. The user is learning what makes a good skill, so the why is not optional unless they ask for terse output.
-- Eval numbers when they exist: trigger rate on tuning and held-out cases, false fires, output score with and without the skill, cost.
+- The issues that matter, most serious first, merged across the static report, the prompt audit and the reviewer (the same issue found twice is one issue). For each: what is wrong, where (file and line), why it matters in one or two sentences, the plain-words version, and the fix. The user is learning what makes a good skill, so the why is not optional unless they ask for terse output.
+- Eval numbers when they exist: trigger rate on tuning and held-out cases, false fires, output score with and without the skill, cost. Context cost from `claude plugin details`.
 - What none of the checks covered.
 
 Offer the improving-skills workflow for the fixes. Don't edit the skill during a check unless the user asks; a check that quietly changes what it checks can't be trusted.
