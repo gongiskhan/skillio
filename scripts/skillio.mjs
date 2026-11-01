@@ -5,7 +5,7 @@
 //
 //   node skillio.mjs <command> [args]       (run with no args for help)
 
-import { existsSync, mkdirSync, writeFileSync, readFileSync, cpSync, rmSync, appendFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, cpSync, rmSync, appendFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve, basename, dirname, relative } from 'node:path';
 import { spawnSync, spawn } from 'node:child_process';
 import { lintSkill, finding } from './lib/lint.mjs';
@@ -14,6 +14,7 @@ import { inventory, compare, listingSize, defaultRoots } from './lib/collisions.
 import { suiteSummary, writeTriggerCases, writeDecoy, listDecoys, readResults, triggerMetrics, listCases, classify, evalDir, readPluginJson, pct, lookupCase } from './lib/evals.mjs';
 import { renderFindings, terminalFindings, counts, verdict, PLUGIN_ROOT } from './lib/report.mjs';
 import { buildWrapper } from './lib/wrapper.mjs';
+import { evalRunner, wantsTrigger, splitFor, agreementFor, heldOutDecision, asPct } from './lib/runner.mjs';
 import { claudeInfo, cleanEnv, validate, validateFindings, pluginDetails, skillCreator, promptAudit, skillDoctor, gitRoot, MIN } from './lib/claude.mjs';
 
 const HELP = `Skillio: tools for building, checking and improving Agent Skills.
@@ -50,10 +51,13 @@ Model calls (each one is billed to your account)
   run-evals <path> --trust [--tag t]... [--case glob] [--runs n] [-j n] [--max-cost usd]
             [--ablation none|with-without] [--model m] [--judge-model m] [--threshold x]
             [--allow-tools t...] [--scaffold] [--evals-from dir] [--label name] [--publish]
-            [--dry-run]
+            [--dry-run] [--baseline <run>] [--noise points]
                             Run claude plugin eval isolated from your browser and
                             messaging, results into the workspace, then summarise.
                             --trust only after the user says they trust the plugin.
+                            A skill whose frontmatter has jv-eval-runner: <path>
+                            runs that script instead (node <path> --split ...);
+                            --baseline compares its held-out agreement with a run.
   results <aggregate-result.json> [--path <plugin-or-skill>]
                             Summarise a finished run: trigger recall, false fires, pass^k
 
@@ -200,6 +204,13 @@ function cmdInventory(pos, opts) {
 function suiteFindings(target, skillDir, skillName) {
   const findings = [];
   let summary = null;
+  // A skill that brings its own runner and is never model-invoked has no
+  // plugin eval cases to look for: the runner is its suite.
+  const own = evalRunner(skillDir);
+  if (own && !own.modelInvoked) {
+    if (own.error) findings.push(finding('E001', own.error, { skill: skillName }));
+    return { findings, summary, runner: own };
+  }
   if (target.pluginRoot) summary = suiteSummary(target.pluginRoot, skillName);
   else if (existsSync(join(skillDir, 'evals'))) {
     const cases = listCases(join(skillDir, 'evals')).map(c => ({ ...c, cls: classify(c, skillName, null) }));
@@ -236,8 +247,9 @@ function cmdEvals(pos, opts) {
   const target = detectTarget(pos[0]);
   for (const dir of target.skills) {
     const name = lintSkill(dir).info.name ?? basename(dir);
-    const { summary } = suiteFindings(target, dir, name);
+    const { summary, runner } = suiteFindings(target, dir, name);
     out(`\n${name}`);
+    if (runner) { out(`  own runner: ${runner.runner}${runner.error ? ` (${runner.error})` : ''}; trigger evals skipped (disable-model-invocation: true)`); continue; }
     if (!summary) { out('  no eval suite'); continue; }
     out(`  suite: ${summary.dir}`);
     out(`  ${summary.cases.length} case(s): ${summary.shouldFire} should-fire, ${summary.shouldNotFire} should-not-fire, ${summary.heldOut} held-out, ${summary.output} output`);
@@ -351,9 +363,9 @@ function cmdCheck(pos, opts) {
     const name = r.info.name ?? r.info.folder;
     const s = suiteFindings(target, r.info.dir, name);
     findings = findings.concat(s.findings);
-    suites.push({ skill: name, summary: s.summary ? { cases: s.summary.cases.length, shouldFire: s.summary.shouldFire, shouldNotFire: s.summary.shouldNotFire, heldOut: s.summary.heldOut, output: s.summary.output } : null });
+    suites.push({ skill: name, runner: s.runner?.runner ?? null, summary: s.summary ? { cases: s.summary.cases.length, shouldFire: s.summary.shouldFire, shouldNotFire: s.summary.shouldNotFire, heldOut: s.summary.heldOut, output: s.summary.output } : null });
   }
-  ran.push(['Eval suite health', suites.map(s => `${s.skill}: ${s.summary ? `${s.summary.shouldFire} fire / ${s.summary.shouldNotFire} near-miss / ${s.summary.heldOut} held-out / ${s.summary.output} output` : 'none'}`).join('; ')]);
+  ran.push(['Eval suite health', suites.map(s => `${s.skill}: ${s.runner ? `own runner ${s.runner}, trigger evals skipped (never model-invoked)` : s.summary ? `${s.summary.shouldFire} fire / ${s.summary.shouldNotFire} near-miss / ${s.summary.heldOut} held-out / ${s.summary.output} output` : 'none'}`).join('; ')]);
 
   const ws = workspaceFor(target, target.kind === 'skill' ? target.path : null);
   const cc = opts.claude === false ? { found: false, reason: '--no-claude' } : claudeInfo();
@@ -388,7 +400,7 @@ function cmdCheck(pos, opts) {
   const seen = new Set();
   findings = findings.filter(f => { const k = `${f.id}|${f.skill ?? ''}|${f.file ?? ''}|${f.message}`; if (seen.has(k)) return false; seen.add(k); return true; });
   const c = counts(findings);
-  const evalsMissing = suites.some(s => !s.summary || !s.summary.cases);
+  const evalsMissing = suites.some(s => !s.runner && (!s.summary || !s.summary.cases));
   const name = target.kind === 'skill' ? (lint[0]?.info.name ?? basename(target.path)) : target.plugin?.name ?? basename(target.path);
   const stamp = timestamp();
   const dir = join(ws, 'skillio', 'checks', stamp);
@@ -466,12 +478,18 @@ function cmdDecoy(pos, opts) {
   out(`Decoy written to ${dir}. run-evals installs it next to the skill under test in every case, the way a rival is installed on a real machine.`);
 }
 
-const RUN_EVAL_OPTS = new Set(['tag', 'case', 'runs', 'concurrency', 'maxCost', 'maxCostUsd', 'ablation', 'model', 'judgeModel', 'threshold', 'allowTools', 'publish', 'label', 'dryRun', 'scaffold', 'evalsFrom', 'trust']);
+const RUN_EVAL_OPTS = new Set(['tag', 'case', 'runs', 'concurrency', 'maxCost', 'maxCostUsd', 'ablation', 'model', 'judgeModel', 'threshold', 'allowTools', 'publish', 'label', 'dryRun', 'scaffold', 'evalsFrom', 'trust', 'baseline', 'noise']);
 
 function cmdRunEvals(pos, opts) {
   if (!pos[0]) fail('run-evals needs a path');
   const unknown = Object.keys(opts).filter(k => !RUN_EVAL_OPTS.has(k));
   if (unknown.length) fail(`run-evals doesn't know ${unknown.map(k => '--' + k.replace(/[A-Z]/g, c => '-' + c.toLowerCase())).join(', ')}; run skillio with no arguments for the options`);
+  const target = detectTarget(pos[0]);
+  // A skill with its own runner: outcome evals go to the runner, and trigger
+  // evals too unless the skill can be model-invoked (then plugin eval measures
+  // its triggering as for any skill).
+  const own = target.kind === 'skill' ? evalRunner(target.path) : null;
+  if (own && !(own.modelInvoked && wantsTrigger(opts.tag))) return runOwnEvals(target, own, opts);
   const cc = claudeInfo();
   if (!opts.dryRun && !cc.can.eval) {
     fail(cc.found ? `evals need Claude Code ${MIN.eval} or later for claude plugin eval (found ${cc.version}); update with \`claude update\`` : `evals need Claude Code (${cc.reason}). The static checks (skillio check) work without it.`);
@@ -482,7 +500,6 @@ function cmdRunEvals(pos, opts) {
   if (!opts.dryRun && !opts.trust) {
     fail('evals load this plugin and run its hooks, scripts and eval cases on this machine as you. Ask the user whether they trust it; on an explicit yes, add --trust.');
   }
-  const target = detectTarget(pos[0]);
   if (!target.pluginRoot && target.kind !== 'skill') fail('run-evals needs a plugin or a skill');
   const ws = workspaceFor(target, target.kind === 'skill' ? target.path : null);
   const evalsFrom = opts.evalsFrom ? resolve(opts.evalsFrom) : null;
@@ -551,6 +568,81 @@ function cmdRunEvals(pos, opts) {
     }
     if (code === 2) out('Exit 2: a partial run (cost ceiling hit or credential rejected). Don\'t compare its numbers with a full run.');
     process.exit(code ?? 1);
+  });
+}
+
+// run-evals for a skill that declares jv-eval-runner. The runner is the
+// skill's own code running as the user, so the trust rule is the same as for
+// plugin eval. Its exit code is passed on, and a held-out run compared with
+// --baseline exits 1 when the change should be reverted.
+function runOwnEvals(target, own, opts) {
+  const name = lintSkill(target.path).info.name ?? basename(target.path);
+  if (wantsTrigger(opts.tag)) {
+    out(`Trigger evals skipped: ${name} has disable-model-invocation: true, so Claude never picks it and there is no triggering to measure. Its outcome evals run through its own runner (${own.runner}); run without --tag trigger.`);
+    return;
+  }
+  if (own.error) fail(own.error);
+  if (!opts.dryRun && !opts.trust) {
+    fail(`evals run ${own.runner}, this skill's own code, on this machine as you. Ask the user whether they trust it; on an explicit yes, add --trust.`);
+  }
+  const split = splitFor(opts.tag);
+  const args = [own.runner, '--split', split];
+  const command = `node ${args.join(' ')}`;
+  const ignored = Object.keys(opts).filter(k => !['tag', 'trust', 'label', 'dryRun', 'baseline', 'noise'].includes(k));
+  if (ignored.length) out(`Not passed to the runner: ${ignored.map(k => '--' + k.replace(/[A-Z]/g, c => '-' + c.toLowerCase())).join(', ')} (claude plugin eval options).`);
+  if (opts.dryRun) { out(`${command}  (in ${target.path})`); return; }
+  let before = null;
+  if (opts.baseline) {
+    const b = resolve(String(opts.baseline));
+    const file = existsSync(join(b, 'result.json')) ? join(b, 'result.json') : b;
+    try { before = JSON.parse(readFileSync(file, 'utf8')); } catch (e) { fail(`--baseline: can't read ${file}: ${e.message}`); }
+  }
+  const ws = workspaceFor(target, target.path);
+  const outDir = join(ws, 'skillio', 'evals', timestamp() + (opts.label ? `-${opts.label}` : ''));
+  mkdirSync(outDir, { recursive: true });
+  writeFileSync(join(outDir, 'command.txt'), `cd ${JSON.stringify(target.path)} && ${command}\n`);
+  out(`Running: ${command} (in ${target.path})`);
+  out(`Results: ${outDir}`);
+  const resultsMd = join(dirname(own.path), 'RESULTS.md');
+  const started = Date.now();
+  let stdout = '';
+  const log = join(outDir, 'run.log');
+  const child = spawn(process.execPath, args, { cwd: target.path, env: cleanEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
+  child.stdout.on('data', d => { stdout += d; process.stdout.write(d); appendFileSync(log, d); });
+  child.stderr.on('data', d => { process.stderr.write(d); appendFileSync(log, d); });
+  child.on('error', e => fail(`could not start the runner: ${e.message}`));
+  child.on('close', (code, signal) => {
+    const exit = code ?? 1;
+    // RESULTS.md counts only if this run wrote it; an old one says nothing about this run.
+    const fresh = existsSync(resultsMd) && statSync(resultsMd).mtimeMs >= started - 1000;
+    const md = fresh ? readFileSync(resultsMd, 'utf8') : null;
+    if (md) writeFileSync(join(outDir, 'RESULTS.md'), md);
+    const fromStdout = agreementFor(stdout, split);
+    const fromMd = agreementFor(md, split);
+    const agreement = fromStdout ?? fromMd;
+    const notes = [];
+    if (fromStdout != null && fromMd != null && Math.abs(fromStdout - fromMd) > 1e-9) notes.push(`stdout says ${asPct(fromStdout)} and RESULTS.md says ${asPct(fromMd)}; the stdout number is used.`);
+    if (agreement == null) notes.push(`The runner printed no "${split} agreement: <n>" line${md ? ' and RESULTS.md has none' : ''}.`);
+    if (signal) notes.push(`The runner was stopped by ${signal}.`);
+    const result = { skill: name, runner: own.runner, split, exit, agreement, startedAt: new Date(started).toISOString(), baseline: opts.baseline ? resolve(String(opts.baseline)) : null };
+    const decision = split === 'held-out' ? heldOutDecision(result, before, { noise: Number(opts.noise ?? 0) }) : null;
+    result.decision = decision;
+    writeFileSync(join(outDir, 'result.json'), JSON.stringify(result, null, 2) + '\n');
+    const status = exit === 0 ? 'at or above the runner\'s threshold' : exit === 1 ? 'below the runner\'s threshold' : 'the runner failed; see run.log';
+    const summary = [
+      '# Eval summary', '',
+      `${name} through its own runner: \`${command}\`, exit ${exit} (${status}).`, '',
+      `## ${name}: ${split === 'all' ? 'all cases' : `${split} split`}`, '',
+      `- Agreement: ${asPct(agreement)}${fromStdout != null ? '' : fromMd != null ? ' (from RESULTS.md)' : ''}.`,
+      ...(decision ? [`- Decision: ${decision.line}`] : []),
+      ...(before ? [`- Baseline: ${result.baseline} (${asPct(before.agreement)})`] : []),
+      ...(md ? [`- The runner's report: ${join(outDir, 'RESULTS.md')}`] : []),
+      ...notes.map(n => `- ${n}`), '',
+      'Read the disagreements in the runner\'s report before changing anything: the number says how often, the cases say why.',
+    ].join('\n');
+    writeFileSync(join(outDir, 'summary.md'), summary + '\n');
+    out('\n' + summary);
+    process.exit(exit !== 0 ? exit : decision?.keep === false ? 1 : 0);
   });
 }
 
