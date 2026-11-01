@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- A skill can bring its own evaluation runner: `jv-eval-runner: <path>` in its frontmatter (for example `evals/run.mjs`). `run-evals` on that skill runs `node <path> --split all|tuning|held-out` from the skill folder instead of `claude plugin eval`, passes the runner's exit code on, and copies its `RESULTS.md` into the run folder. Trigger evals are skipped when the skill also has `disable-model-invocation: true`; `check` and `evals` treat the runner as the skill's suite instead of reporting E001.
+- `run-evals --baseline <run> [--noise points]` compares a held-out run of such a skill with an earlier one and says keep or revert, the rule improving-skills uses for Skillio's own held-out score; it exits 1 on revert. checking-skills and improving-skills describe both.
+
 ## 0.3.0 (2026-10-23)
 
 Adds `web-testing`, a skill built with skill-creator and measured and improved with Skillio.

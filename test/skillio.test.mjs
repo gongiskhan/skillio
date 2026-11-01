@@ -16,6 +16,7 @@ import { writeTriggerCases, writeDecoy, listDecoys, listCases, classify, readRes
 import { detectTarget, workspaceFor } from '../scripts/lib/target.mjs';
 import { buildWrapper } from '../scripts/lib/wrapper.mjs';
 import { compareVersions, cleanEnv, parseDetails, validateFindings, claudeInfo } from '../scripts/lib/claude.mjs';
+import { evalRunner, wantsTrigger, splitFor, agreementFor, heldOutDecision } from '../scripts/lib/runner.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const FIX = join(ROOT, 'test', 'fixtures');
@@ -353,6 +354,125 @@ test('results warn when the plugin never loaded', () => {
   assert.match(r.stdout, /Read this first/);
   assert.match(r.stdout, /will_not_load/);
   assert.match(r.stdout, /cannot pass with the granted tools/);
+});
+
+// A skill that brings its own evaluation runner. The fake runner records its
+// arguments, prints its agreement, writes RESULTS.md and exits with the code
+// the test asks for.
+function runnerSkill({ exit = 0, agreement = '87%', modelInvoked = false, runner = 'evals/run.mjs' } = {}) {
+  const dir = join(tmp(), 'policy-skill');
+  mkdirSync(join(dir, 'evals'), { recursive: true });
+  writeFileSync(join(dir, 'SKILL.md'), [
+    '---', 'name: policy-skill',
+    'description: Chooses the model and effort for a step from the questions a placement script asks. Use when the router asks for a placement.',
+    ...(modelInvoked ? [] : ['disable-model-invocation: true']),
+    `jv-eval-runner: ${runner}`, '---', '', '# Placement policy', '', 'One.', 'Two.', 'Three.', 'Four.', 'Five.', '',
+  ].join('\n'));
+  writeFileSync(join(dir, 'evals', 'cases.json'), '[]\n');
+  writeFileSync(join(dir, 'evals', 'run.mjs'), [
+    "import { writeFileSync } from 'node:fs';",
+    "const split = process.argv[process.argv.indexOf('--split') + 1];",
+    "writeFileSync('evals/args.json', JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd() }));",
+    `console.log(split + ' agreement: ${agreement}');`,
+    `writeFileSync('evals/RESULTS.md', '# Results\\n\\n' + split + ' agreement: ${agreement}\\n');`,
+    `process.exit(${exit});`, '',
+  ].join('\n'));
+  return dir;
+}
+const runsOf = dir => { const d = join(`${dir}-workspace`, 'skillio', 'evals'); return existsSync(d) ? readdirSync(d).map(n => join(d, n)) : []; };
+
+test('a declared eval runner is read from the frontmatter', () => {
+  const own = evalRunner(runnerSkill());
+  assert.equal(own.runner, join('evals', 'run.mjs'));
+  assert.equal(own.modelInvoked, false);
+  assert.equal(own.error, undefined);
+  assert.equal(evalRunner(runnerSkill({ modelInvoked: true })).modelInvoked, true);
+  assert.equal(evalRunner(join(FIX, 'good-skill')), null);
+  assert.match(evalRunner(runnerSkill({ runner: '../outside.mjs' })).error, /inside the skill folder/);
+  assert.match(evalRunner(runnerSkill({ runner: 'evals/missing.mjs' })).error, /does not exist/);
+});
+
+test('tags map to the runner split, and agreement is read in either form', () => {
+  assert.equal(splitFor(['held-out']), 'held-out');
+  assert.equal(splitFor(['policy-skill:held-out']), 'held-out');
+  assert.equal(splitFor(['policy-skill:tuning']), 'tuning');
+  assert.equal(splitFor(['output']), 'all');
+  assert.equal(splitFor([]), 'all');
+  assert.equal(splitFor(['tuning', 'held-out']), 'all');
+  assert.ok(wantsTrigger(['trigger']));
+  assert.ok(!wantsTrigger(['trigger', 'output']));
+  assert.ok(!wantsTrigger([]));
+  assert.equal(agreementFor('tuning agreement: 50%\nheld-out agreement: 87.5%\n', 'held-out'), 0.875);
+  assert.equal(agreementFor('- **held-out agreement**: 0.9', 'held-out'), 0.9);
+  assert.equal(agreementFor('agreement: 0.75', 'all'), 0.75);
+  assert.equal(agreementFor('tuning agreement: 50%', 'held-out'), null);
+});
+
+test('trigger evals are skipped for a runner skill that is never model-invoked', () => {
+  const dir = runnerSkill();
+  const r = spawnSync('node', [CLI, 'run-evals', dir, '--trust', '--tag', 'trigger'], { encoding: 'utf8', env: NO_CLAUDE });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /Trigger evals skipped/);
+  assert.deepEqual(runsOf(dir), []);
+  assert.ok(!existsSync(join(dir, 'evals', 'args.json')), 'the runner did not run');
+  // A model-invoked skill still has triggering to measure: plugin eval's path, which needs Claude Code.
+  const invoked = runnerSkill({ modelInvoked: true });
+  const t = spawnSync('node', [CLI, 'run-evals', invoked, '--trust', '--tag', 'trigger'], { encoding: 'utf8', env: NO_CLAUDE });
+  assert.notEqual(t.status, 0);
+  assert.match(t.stderr, /need Claude Code/);
+  // check and evals see the runner as the suite, so there is no E001.
+  const c = spawnSync('node', [CLI, 'check', dir, '--json', '--root', tmp()], { encoding: 'utf8', env: NO_CLAUDE });
+  const out = JSON.parse(c.stdout);
+  assert.ok(!out.findings.some(f => f.id.startsWith('E')), JSON.stringify(out.findings));
+  assert.ok(out.ran.some(([k, v]) => k === 'Eval suite health' && /own runner evals\/run\.mjs/.test(v)));
+});
+
+test('outcome evals are delegated to the runner, and its exit code is passed on', () => {
+  const pass = runnerSkill({ exit: 0, agreement: '87%' });
+  const r = spawnSync('node', [CLI, 'run-evals', pass, '--trust', '--tag', 'policy-skill:held-out', '--label', 'before-x'], { encoding: 'utf8', env: NO_CLAUDE });
+  assert.equal(r.status, 0, r.stderr);
+  const args = JSON.parse(readFileSync(join(pass, 'evals', 'args.json'), 'utf8'));
+  assert.deepEqual(args.argv, ['--split', 'held-out']);
+  assert.equal(args.cwd, pass);
+  const [run] = runsOf(pass);
+  assert.match(run, /before-x$/);
+  const result = JSON.parse(readFileSync(join(run, 'result.json'), 'utf8'));
+  assert.equal(result.exit, 0);
+  assert.equal(result.agreement, 0.87);
+  assert.equal(result.decision.keep, true);
+  assert.match(readFileSync(join(run, 'RESULTS.md'), 'utf8'), /held-out agreement: 87%/);
+  assert.match(readFileSync(join(run, 'summary.md'), 'utf8'), /Agreement: 87%/);
+
+  const failing = runnerSkill({ exit: 1, agreement: '40%' });
+  const f = spawnSync('node', [CLI, 'run-evals', failing, '--trust', '--tag', 'output'], { encoding: 'utf8', env: NO_CLAUDE });
+  assert.equal(f.status, 1);
+  assert.deepEqual(JSON.parse(readFileSync(join(failing, 'evals', 'args.json'), 'utf8')).argv, ['--split', 'all']);
+  assert.match(f.stdout, /below the runner's threshold/);
+
+  const untrusted = spawnSync('node', [CLI, 'run-evals', runnerSkill(), '--tag', 'output'], { encoding: 'utf8', env: NO_CLAUDE });
+  assert.notEqual(untrusted.status, 0);
+  assert.match(untrusted.stderr, /add --trust/);
+});
+
+test('the runner held-out agreement decides whether a change is kept', () => {
+  const run = (exit, agreement, split = 'held-out') => ({ exit, agreement, split });
+  assert.equal(heldOutDecision(run(0, 0.9), run(0, 0.8)).keep, true);
+  assert.equal(heldOutDecision(run(0, 0.8), run(0, 0.8)).keep, false, 'no gain is not a gain');
+  assert.equal(heldOutDecision(run(0, 0.82), run(0, 0.8), { noise: 5 }).keep, false, 'a gain inside the noise is not kept');
+  assert.equal(heldOutDecision(run(1, 0.95), run(0, 0.8)).keep, false, 'below the runner threshold');
+  assert.equal(heldOutDecision(run(2, null), run(0, 0.8)).keep, null, 'a crashed runner decides nothing');
+  assert.equal(heldOutDecision(run(0, 0.9, 'tuning'), run(0, 0.8)).keep, null, 'tuning numbers never decide');
+
+  // Through the CLI: a before run, then an after run compared with it.
+  const before = runnerSkill({ agreement: '80%' });
+  spawnSync('node', [CLI, 'run-evals', before, '--trust', '--tag', 'held-out', '--label', 'before'], { encoding: 'utf8', env: NO_CLAUDE });
+  const [baseline] = runsOf(before);
+  const better = spawnSync('node', [CLI, 'run-evals', runnerSkill({ agreement: '90%' }), '--trust', '--tag', 'held-out', '--baseline', baseline], { encoding: 'utf8', env: NO_CLAUDE });
+  assert.equal(better.status, 0, better.stderr);
+  assert.match(better.stdout, /Keep: held-out agreement rose from 80% to 90%/);
+  const worse = spawnSync('node', [CLI, 'run-evals', runnerSkill({ agreement: '70%' }), '--trust', '--tag', 'held-out', '--baseline', baseline], { encoding: 'utf8', env: NO_CLAUDE });
+  assert.equal(worse.status, 1);
+  assert.match(worse.stdout, /Revert/);
 });
 
 test('with Claude Code, a skill is validated in place and a broken sibling is not its problem', { skip: !HAS_CLAUDE && 'claude not installed' }, () => {
